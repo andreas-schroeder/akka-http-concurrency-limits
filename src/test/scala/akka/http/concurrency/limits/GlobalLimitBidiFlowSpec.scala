@@ -20,7 +20,7 @@ import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
 import scala.util.{Failure, Success}
 
-object LimitBidiFlowSpec {
+object GlobalLimitBidiFlowSpec {
   val config: String =
     s"""
        |akka.scheduler.implementation = "akka.testkit.ExplicitlyTriggeredScheduler"
@@ -32,7 +32,7 @@ object LimitBidiFlowSpec {
 }
 
 //noinspection TypeAnnotation
-class LimitBidiFlowSpec extends ScalaTestWithActorTestKit(LimitBidiFlowSpec.config) with AnyWordSpecLike {
+class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiFlowSpec.config) with AnyWordSpecLike {
 
   val manualTime: ManualTime = ManualTime()
 
@@ -157,7 +157,7 @@ class LimitBidiFlowSpec extends ScalaTestWithActorTestKit(LimitBidiFlowSpec.conf
     val responseOut = TestSubscriber.probe[HttpResponse]()
     val probe = TestProbe[RequestReceived]()
 
-    val testSetup = LimitBidiFlow(probe.ref) join Flow.fromSinkAndSource(
+    val testSetup = GlobalLimitBidi(probe.ref) join Flow.fromSinkAndSource(
       Sink.fromSubscriber(requestOut),
       Source.fromPublisher(responseIn)
     )
@@ -198,7 +198,7 @@ class LimitBidiFlowSpec extends ScalaTestWithActorTestKit(LimitBidiFlowSpec.conf
 
       val limiter = system.systemActorOf(LimitActor.liFoQueued(limit, 10, _ => 100.millis), "limiter")
 
-      val limitFlow = LimitBidiFlow(limiter)
+      val limitFlow = GlobalLimitBidi(limiter)
 
       val counter = new AtomicInteger
 

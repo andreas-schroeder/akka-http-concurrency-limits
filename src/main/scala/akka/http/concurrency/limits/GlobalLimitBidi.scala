@@ -7,7 +7,7 @@ import akka.actor.typed.scaladsl.AskPattern._
 import akka.actor.typed.scaladsl.adapter._
 import akka.actor.typed.{ActorRef, Scheduler}
 import akka.http.concurrency.limits.LimitActor._
-import akka.http.concurrency.limits.LimitBidiFlow.LimitBidiFlowShape
+import akka.http.concurrency.limits.GlobalLimitBidi.LimitBidiFlowShape
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
 import akka.stream.impl.Buffer
 import akka.stream.scaladsl.BidiFlow
@@ -18,17 +18,17 @@ import akka.util.Timeout
 import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success, Try}
 
-object LimitBidiFlow {
+object GlobalLimitBidi {
   def apply(
     limiter: ActorRef[RequestReceived]
   ): BidiFlow[HttpRequest, HttpRequest, HttpResponse, HttpResponse, NotUsed] =
-    BidiFlow.fromGraph(new LimitBidiFlow(limiter))
+    BidiFlow.fromGraph(new GlobalLimitBidi(limiter))
 
   type LimitBidiFlowShape =
     BidiShape[HttpRequest, HttpRequest, HttpResponse, HttpResponse]
 }
 
-class LimitBidiFlow(limiter: ActorRef[RequestReceived]) extends GraphStage[LimitBidiFlowShape] {
+class GlobalLimitBidi(limiter: ActorRef[RequestReceived]) extends GraphStage[LimitBidiFlowShape] {
 
   private final val tooManyRequestsResponse =
     HttpResponse(StatusCodes.TooManyRequests, entity = "Too many requests")
@@ -60,7 +60,7 @@ class LimitBidiFlow(limiter: ActorRef[RequestReceived]) extends GraphStage[Limit
         serverRequestTimeout = Timeout(timeout.toNanos, TimeUnit.NANOSECONDS)
 
         val parallelism = config.getInt("akka.http.server.pipelining-limit")
-        inFlightAccepted = Buffer(parallelism, parallelism + 1)
+        inFlightAccepted = Buffer(parallelism, inheritedAttributes)
       }
 
       setHandler(requestIn, () => {
