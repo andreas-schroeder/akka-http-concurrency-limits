@@ -114,7 +114,9 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       requestIn.sendNext(request())
       val replyProbe = acceptRequest()
 
-      responseOut.cancel() // http server blueprint will cancel outlet on timeout
+      // http server blueprint will cancel outlet on timeout
+      responseOut.cancel()
+      requestIn.sendComplete()
 
       val replied = replyProbe.expectMessageType[Replied]
       replied.didDrop shouldBe true
@@ -157,7 +159,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     val responseOut = TestSubscriber.probe[HttpResponse]()
     val probe = TestProbe[RequestReceived]()
 
-    val testSetup = GlobalLimitBidi(probe.ref) join Flow.fromSinkAndSource(
+    val testSetup = GlobalLimitBidiFlow(probe.ref) join Flow.fromSinkAndSource(
       Sink.fromSubscriber(requestOut),
       Source.fromPublisher(responseIn)
     )
@@ -198,7 +200,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
 
       val limiter = system.systemActorOf(LimitActor.liFoQueued(limit, 10, _ => 100.millis), "limiter")
 
-      val limitFlow = GlobalLimitBidi(limiter)
+      val limitFlow = GlobalLimitBidiFlow(limiter)
 
       val counter = new AtomicInteger
 

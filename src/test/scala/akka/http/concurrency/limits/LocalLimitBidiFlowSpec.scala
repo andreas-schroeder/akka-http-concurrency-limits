@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.actor.testkit.typed.scaladsl.{ManualTime, ScalaTestWithActorTestKit}
 import akka.actor.typed.scaladsl.adapter._
-import akka.http.concurrency.limits.LocalLimitBidi.{Dropped, Ignored, Processed, Outcome}
+import akka.http.concurrency.limits.LocalLimitBidiFlow.{Dropped, Ignored, Processed, Outcome}
 import akka.stream.Materializer
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.stream.testkit.{TestPublisher, TestSubscriber}

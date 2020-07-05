@@ -1,28 +1,29 @@
 package akka.http.concurrency.limits
 
 import akka.NotUsed
-import akka.http.concurrency.limits.LocalLimitBidi._
+import akka.http.concurrency.limits.LocalLimitBidiFlow._
 import akka.stream.impl.Buffer
 import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
 import akka.stream.{Attributes, BidiShape, Inlet, Outlet}
 import com.netflix.concurrency.limits.Limit
 
-object LocalLimitBidi {
-  class InFlightElement(val startTime: Long)
-
-  type LimitBidiFlowShape[In, Out] = BidiShape[In, In, Out, Out]
-
-  sealed trait Outcome
-  case object Processed extends Outcome
-  case object Ignored extends Outcome
-  case object Dropped extends Outcome
+object LocalLimitBidiFlow {
 
   def apply[In, Out](limitAlgorithm: () => Limit,
                      rejection: In => Out,
                      result: Out => Outcome = (_: Out) => Processed,
                      parallelism: Int): BidiFlow[In, In, Out, Out, NotUsed] =
     BidiFlow.fromGraph(new LocalLimitBidi(limitAlgorithm, rejection, result, parallelism))
+
+  class InFlightElement(val startTime: Long)
+
+  type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
+
+  sealed trait Outcome
+  case object Processed extends Outcome
+  case object Ignored extends Outcome
+  case object Dropped extends Outcome
 
   case class UnexpectedOutputException(element: Any)
       extends RuntimeException(
@@ -39,14 +40,14 @@ class LocalLimitBidi[In, Out](limitAlgorithm: () => Limit,
                               result: Out => Outcome,
                               parallelism: Int,
                               clock: () => Long = () => System.nanoTime())
-    extends GraphStage[LimitBidiFlowShape[In, Out]] {
+    extends GraphStage[LimitShape[In, Out]] {
 
   private val in = Inlet[In]("LimitBidiFlow.in")
   private val toWrapped = Outlet[In]("LimitBidiFlow.toWrapped")
   private val fromWrapped = Inlet[Out]("LimitBidiFlow.fromWrapped")
   private val out = Outlet[Out]("LimitBidiFlow.out")
 
-  def shape: LimitBidiFlowShape[In, Out] = BidiShape(in, toWrapped, fromWrapped, out)
+  def shape: LimitShape[In, Out] = BidiShape(in, toWrapped, fromWrapped, out)
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new GraphStageLogic(shape) {
@@ -80,7 +81,9 @@ class LocalLimitBidi[In, Out](limitAlgorithm: () => Limit,
       )
 
       setHandler(toWrapped, new OutHandler {
-        override def onPull(): Unit = if (inFlightElements.used < parallelism) pull(in) else pullSuppressed = true
+        override def onPull(): Unit =
+          if (inFlightElements.used < inFlightElements.capacity) pull(in) else pullSuppressed = true
+
         override def onDownstreamFinish(cause: Throwable): Unit = cancel(in, cause)
       })
 

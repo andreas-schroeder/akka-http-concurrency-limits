@@ -12,7 +12,6 @@ import akka.http.concurrency.limits.LimitActor._
 import akka.http.scaladsl.model.HttpRequest
 import com.netflix.concurrency.limits.Limit
 import com.netflix.concurrency.limits.limit.SettableLimit
-import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.concurrent.duration._
 
