@@ -5,22 +5,21 @@ import java.util.concurrent.TimeUnit
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl._
 import akka.http.concurrency.limits.LimitActor._
-import akka.http.scaladsl.model.HttpRequest
 import com.netflix.concurrency.limits.Limit
 
 import scala.collection.mutable
 import scala.concurrent.duration._
 
-class LiFoQueuedLimitActor(limitAlgorithm: Limit,
+class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
                            maxLiFoQueueDepth: Int,
-                           maxDelay: HttpRequest => FiniteDuration,
-                           context: ActorContext[LimitActorCommand],
-                           timers: TimerScheduler[LimitActorCommand],
+                           maxDelay: T => FiniteDuration,
+                           context: ActorContext[LimitActorCommand[T]],
+                           timers: TimerScheduler[LimitActorCommand[T]],
                            clock: () => Long = () => System.nanoTime())
-    extends AbstractBehavior[LimitActorCommand](context) {
+    extends AbstractBehavior[LimitActorCommand[T]](context) {
 
-  private val inFlight: mutable.Set[RequestId] = mutable.Set.empty
-  private val throttledLiFoQueue: mutable.Stack[RequestReceived] = mutable.Stack.empty
+  private val inFlight: mutable.Set[Element[T]] = mutable.Set.empty
+  private val throttledLiFoQueue: mutable.Stack[Element[T]] = mutable.Stack.empty
   private var limit: Int = limitAlgorithm.getLimit
   limitAlgorithm.notifyOnChange(l => limit = l)
 
@@ -29,22 +28,22 @@ class LiFoQueuedLimitActor(limitAlgorithm: Limit,
     FiniteDuration(timeout.toNanos, TimeUnit.NANOSECONDS)
   }
 
-  def onMessage(command: LimitActorCommand): Behavior[LimitActorCommand] = command match {
-    case received: RequestReceived =>
+  def onMessage(command: LimitActorCommand[T]): Behavior[LimitActorCommand[T]] = command match {
+    case received: Element[T] =>
       if (inFlight.size < limit) acceptRequest(received) else throttleOrDelay(received)
       this
 
-    case RequestTimedOut(startTime, id) =>
-      if (inFlight.remove(id)) {
+    case ElementTimedOut(element) =>
+      if (inFlight.remove(element)) {
         // raciness: timeout vs regular response are intentionally concurrent.
-        limitAlgorithm.onSample(startTime, clock() - startTime, inFlight.size, true)
+        limitAlgorithm.onSample(element.startTime, clock() - element.startTime, inFlight.size, true)
         maybeAcceptNext()
       }
       this
 
-    case MaxRequestDelayPassed(sender, id) =>
-      sender ! RequestRejected
-      throttledLiFoQueue.filterInPlace(_.id eq id)
+    case MaxDelayPassed(sender, received) =>
+      sender ! ElementRejected(received.value)
+      throttledLiFoQueue.filterInPlace(_ eq received)
       this
 
     case Replied(start, duration, didDrop, id) =>
@@ -65,27 +64,25 @@ class LiFoQueuedLimitActor(limitAlgorithm: Limit,
       this
   }
 
-  private def throttleOrDelay(received: RequestReceived): Unit = {
-    val delay = maxDelay(received.request)
+  private def throttleOrDelay(received: Element[T]): Unit = {
+    val delay = maxDelay(received.value)
     if (delay.length == 0 || throttledLiFoQueue.size >= maxLiFoQueueDepth * limit) {
-      received.sender ! RequestRejected
+      received.sender ! ElementRejected(received.value)
     } else {
       throttledLiFoQueue.push(received)
-      timers.startSingleTimer(received.id, MaxRequestDelayPassed(received.sender, received.id), delay)
+      timers.startSingleTimer(received, MaxDelayPassed(received.sender, received), delay)
     }
   }
 
   def maybeAcceptNext(): Unit = if (inFlight.size < limit && throttledLiFoQueue.nonEmpty) {
     val request = throttledLiFoQueue.pop()
-    timers.cancel(request.id)
+    timers.cancel(request)
     acceptRequest(request)
   }
 
-  private def acceptRequest(received: RequestReceived): Unit = {
-    val id = received.id
-    inFlight += id
-    val accept = new RequestAccepted(received.request, context.self, clock, id)
-    received.sender ! accept
-    timers.startSingleTimer(id, RequestTimedOut(accept.startTime, id), serverRequestTimeout)
+  private def acceptRequest(received: Element[T]): Unit = {
+    inFlight += received
+    received.sender ! new ElementAccepted(context.self, received)
+    timers.startSingleTimer(received, ElementTimedOut(received), serverRequestTimeout)
   }
 }

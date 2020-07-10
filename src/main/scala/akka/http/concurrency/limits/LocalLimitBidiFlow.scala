@@ -1,6 +1,7 @@
 package akka.http.concurrency.limits
 
 import akka.NotUsed
+import akka.http.concurrency.limits.LimitBidiFolow._
 import akka.http.concurrency.limits.LocalLimitBidiFlow._
 import akka.stream.impl.Buffer
 import akka.stream.scaladsl.BidiFlow
@@ -19,11 +20,6 @@ object LocalLimitBidiFlow {
   class InFlightElement(val startTime: Long)
 
   type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
-
-  sealed trait Outcome
-  case object Processed extends Outcome
-  case object Ignored extends Outcome
-  case object Dropped extends Outcome
 
   case class UnexpectedOutputException(element: Any)
       extends RuntimeException(

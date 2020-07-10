@@ -1,14 +1,12 @@
 package akka.http.concurrency.limits
 
-import java.util.concurrent.TimeUnit
-
 import akka.NotUsed
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.actor.typed.scaladsl.adapter._
 import akka.actor.typed.{ActorRef, Scheduler}
-import akka.http.concurrency.limits.LimitActor._
 import akka.http.concurrency.limits.GlobalLimitBidiFlow.LimitShape
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
+import akka.http.concurrency.limits.LimitActor._
+import akka.http.concurrency.limits.LimitBidiFolow.{Dropped, Ignored, Outcome, Processed}
 import akka.stream.impl.Buffer
 import akka.stream.scaladsl.BidiFlow
 import akka.stream.stage._
@@ -16,87 +14,93 @@ import akka.stream.{Attributes, BidiShape, Inlet, Outlet}
 import akka.util.Timeout
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 
 object GlobalLimitBidiFlow {
-  def apply(
-    limiter: ActorRef[RequestReceived]
-  ): BidiFlow[HttpRequest, HttpRequest, HttpResponse, HttpResponse, NotUsed] =
-    BidiFlow.fromGraph(new GlobalLimitBidi(limiter))
+  def apply[In, Out](limiter: ActorRef[Element[In]],
+                     parallelism: Int,
+                     timeout: FiniteDuration,
+                     rejection: In => Out,
+                     result: Out => Outcome = (_: Out) => Processed): BidiFlow[In, In, Out, Out, NotUsed] =
+    BidiFlow.fromGraph(new GlobalLimitBidi(limiter, rejection, result, parallelism, timeout))
 
-  type LimitShape = BidiShape[HttpRequest, HttpRequest, HttpResponse, HttpResponse]
+  type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
 }
 
-class GlobalLimitBidi(limiter: ActorRef[RequestReceived]) extends GraphStage[LimitShape] {
+class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
+                               rejection: In => Out,
+                               result: Out => Outcome,
+                               parallelism: Int,
+                               timeout: FiniteDuration,
+                               clock: () => Long = () => System.nanoTime())
+    extends GraphStage[LimitShape[In, Out]] {
 
-  private final val tooManyRequestsResponse =
-    HttpResponse(StatusCodes.TooManyRequests, entity = "Too many requests")
+  private val in = Inlet[In]("LimitBidiFlow.in")
+  private val toWrapped = Outlet[In]("LimitBidiFlow.toWrapped")
+  private val fromWrapped = Inlet[Out]("LimitBidiFlow.fromWrapped")
+  private val out = Outlet[Out]("LimitBidiFlow.out")
 
-  private val in = Inlet[HttpRequest]("LimitBidiFlow.in")
-  private val toWrapped = Outlet[HttpRequest]("LimitBidiFlow.toWrapped")
-  private val fromWrapped = Inlet[HttpResponse]("LimitBidiFlow.fromWrapped")
-  private val out = Outlet[HttpResponse]("LimitBidiFlow.out")
-
-  def shape: LimitShape =
+  def shape: LimitShape[In, Out] =
     BidiShape(in, toWrapped, fromWrapped, out)
 
-  def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
-    new GraphStageLogic(shape) {
+  def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-      var inFlightAccepted: Buffer[RequestAccepted] = _
-      var pullSuppressed = false
+    var inFlightAccepted: Buffer[ElementAccepted[In]] = _
+    var pullSuppressed = false
 
-      implicit var serverRequestTimeout: Timeout = _
-      implicit var scheduler: Scheduler = _
-      implicit var ec: ExecutionContext = _
+    implicit val askTimeout: Timeout = Timeout(timeout)
+    implicit var scheduler: Scheduler = _
+    implicit var ec: ExecutionContext = _
 
-      override def preStart(): Unit = {
-        val system = materializer.system
-        scheduler = system.toTyped.scheduler
-        ec = system.dispatcher
+    override def preStart(): Unit = {
+      val system = materializer.system
+      scheduler = system.toTyped.scheduler
+      ec = system.dispatcher
+      inFlightAccepted = Buffer(parallelism, inheritedAttributes)
+    }
 
-        val config = system.settings.config
-        val timeout = config.getDuration("akka.http.server.request-timeout")
-        serverRequestTimeout = Timeout(timeout.toNanos, TimeUnit.NANOSECONDS)
-
-        val parallelism = config.getInt("akka.http.server.pipelining-limit")
-        inFlightAccepted = Buffer(parallelism, inheritedAttributes)
-      }
-
-      setHandler(in, new InHandler {
+    setHandler(
+      in,
+      new InHandler {
         def onPush(): Unit = {
-          val request = grab(in)
-          limiter.ask[LimitActorResponse](sender => RequestReceived(sender, request)).onComplete(limiterResponse.invoke)
+          val value = grab(in)
+          limiter
+            .ask[LimitActorResponse[In]](sender => Element(sender, value, clock()))
+            .onComplete(limiterResponse.invoke)
         }
         override def onUpstreamFinish(): Unit = complete(toWrapped)
-      })
-
-      private val limiterResponse = createAsyncCallback[Try[LimitActorResponse]] {
-        case Success(accept: RequestAccepted) =>
-          inFlightAccepted.enqueue(accept)
-          push(toWrapped, accept.request)
-
-        case Success(RequestRejected) => push(out, tooManyRequestsResponse)
-        case Failure(ex)              => failStage(ex)
       }
+    )
 
-      setHandler(toWrapped, new OutHandler {
-        override def onPull(): Unit =
-          if (inFlightAccepted.used < inFlightAccepted.capacity) pull(in) else pullSuppressed = true
+    private val limiterResponse = createAsyncCallback[Try[LimitActorResponse[In]]] {
+      case Success(accept: ElementAccepted[In]) =>
+        inFlightAccepted.enqueue(accept)
+        push(toWrapped, accept.value)
 
-        override def onDownstreamFinish(cause: Throwable): Unit = cancel(in, cause)
-      })
+      case Success(ElementRejected(element)) => push(out, rejection(element))
+      case Failure(ex)                       => failStage(ex)
+    }
 
-      setHandler(fromWrapped, new InHandler {
+    setHandler(toWrapped, new OutHandler {
+      override def onPull(): Unit =
+        if (inFlightAccepted.used < inFlightAccepted.capacity) pull(in) else pullSuppressed = true
+
+      override def onDownstreamFinish(cause: Throwable): Unit = cancel(in, cause)
+    })
+
+    setHandler(
+      fromWrapped,
+      new InHandler {
         override def onPush(): Unit = {
           val response = grab(fromWrapped)
           // ignores the time it takes to stream the response body to clients on purpose to avoid
           // slow clients or network to be considered in server response latency measurements.
           val accepted = inFlightAccepted.dequeue()
-          response.status match {
-            case _: StatusCodes.ServerError => accepted.ignore()
-            case _: StatusCodes.ClientError => accepted.ignore()
-            case _                          => accepted.success()
+          result(response) match {
+            case Processed => accepted.success(clock())
+            case Dropped   => accepted.dropped(clock())
+            case Ignored   => accepted.ignore()
           }
           push(out, response)
           if (pullSuppressed) {
@@ -104,21 +108,22 @@ class GlobalLimitBidi(limiter: ActorRef[RequestReceived]) extends GraphStage[Lim
             pullSuppressed = false
           }
         }
-      })
-
-      // when the last response was 'Too many requests', fromWrapped is already pulled and
-      // in isn't pulled. So we need to pull the right inlet.
-      setHandler(out, new OutHandler {
-        // when the last element was rejected, 'fromWrapped' is already pulled and
-        // 'in' isn't pulled. So we need to pull the right inlet.
-        override def onPull(): Unit = if (hasBeenPulled(fromWrapped)) pull(in) else pull(fromWrapped)
-        override def onDownstreamFinish(cause: Throwable): Unit = cancel(fromWrapped, cause)
-      })
-
-      // Akka Http tears down the request handler flow on request timeout, and therefore
-      // any in-flight request at this time was dropped.
-      override def postStop(): Unit = while (inFlightAccepted.nonEmpty) {
-        inFlightAccepted.dequeue().dropped()
       }
+    )
+
+    // when the last response was 'Too many requests', fromWrapped is already pulled and
+    // in isn't pulled. So we need to pull the right inlet.
+    setHandler(out, new OutHandler {
+      // when the last element was rejected, 'fromWrapped' is already pulled and
+      // 'in' isn't pulled. So we need to pull the right inlet.
+      override def onPull(): Unit = if (hasBeenPulled(fromWrapped)) pull(in) else pull(fromWrapped)
+      override def onDownstreamFinish(cause: Throwable): Unit = cancel(fromWrapped, cause)
+    })
+
+    // Akka Http tears down the request handler flow on request timeout, and therefore
+    // any in-flight request at this time was dropped.
+    override def postStop(): Unit = while (inFlightAccepted.nonEmpty) {
+      inFlightAccepted.dequeue().dropped(clock())
     }
+  }
 }
