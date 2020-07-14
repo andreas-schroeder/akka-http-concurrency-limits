@@ -34,9 +34,7 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
     (spawn(LimitActor.liFoQueued(limit, maxQueueDepth, maxDelay)), TestProbe[LimitActorResponse[String]]())
 
   def element(probe: TestProbe[LimitActorResponse[String]],
-              value: String = "One",
-              startTime: Long = 1L): Element[String] =
-    Element(probe.ref, value, startTime)
+              value: String = "One"): Element[String] = Element(probe.ref, value)
 
   "LiFoQueuedLimitActor" should {
 

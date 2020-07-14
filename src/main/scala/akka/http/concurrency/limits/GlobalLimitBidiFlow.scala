@@ -66,7 +66,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
         def onPush(): Unit = {
           val value = grab(in)
           limiter
-            .ask[LimitActorResponse[In]](sender => Element(sender, value, clock()))
+            .ask[LimitActorResponse[In]](sender => Element(sender, value))
             .onComplete(limiterResponse.invoke)
         }
         override def onUpstreamFinish(): Unit = complete(toWrapped)
@@ -76,6 +76,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
     private val limiterResponse = createAsyncCallback[Try[LimitActorResponse[In]]] {
       case Success(accept: ElementAccepted[In]) =>
         inFlightAccepted.enqueue(accept)
+        accept.startTime = clock()
         push(toWrapped, accept.value)
 
       case Success(ElementRejected(element)) => push(out, rejection(element))

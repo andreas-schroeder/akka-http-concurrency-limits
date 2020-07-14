@@ -29,11 +29,11 @@ object LimitActor {
 
   sealed trait LimitActorCommand[T]
 
-  case class Element[T](sender: ActorRef[LimitActorResponse[T]], value: T, startTime: Long) extends LimitActorCommand[T]
+  case class Element[T](sender: ActorRef[LimitActorResponse[T]], value: T) extends LimitActorCommand[T]
 
   case class Replied[T](startTime: Long, duration: Long, didDrop: Boolean, element: Element[T]) extends LimitActorCommand[T]
   case class Ignore[T](element: Element[T]) extends LimitActorCommand[T]
-  case class ElementTimedOut[T](element: Element[T]) extends LimitActorCommand[T]
+  case class ElementTimedOut[T](element: Element[T], startTime: Long) extends LimitActorCommand[T]
   case class MaxDelayPassed[T](sender: ActorRef[LimitActorResponse[T]], element: Element[T]) extends LimitActorCommand[T]
 
   sealed trait LimitActorResponse[T]
@@ -43,7 +43,7 @@ object LimitActor {
 
     def value: T = element.value
 
-    def startTime: Long = element.startTime
+    var startTime: Long = _
 
     def success(endTime: Long): Unit = actor ! Replied(startTime, endTime - startTime, didDrop = false, element)
 

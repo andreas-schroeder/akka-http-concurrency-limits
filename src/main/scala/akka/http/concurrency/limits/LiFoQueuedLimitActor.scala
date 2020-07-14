@@ -33,10 +33,10 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
       if (inFlight.size < limit) acceptRequest(received) else throttleOrDelay(received)
       this
 
-    case ElementTimedOut(element) =>
+    case ElementTimedOut(element, startTime) =>
       if (inFlight.remove(element)) {
         // raciness: timeout vs regular response are intentionally concurrent.
-        limitAlgorithm.onSample(element.startTime, clock() - element.startTime, inFlight.size, true)
+        limitAlgorithm.onSample(startTime, clock() - startTime, inFlight.size, true)
         maybeAcceptNext()
       }
       this
@@ -83,6 +83,6 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
   private def acceptRequest(received: Element[T]): Unit = {
     inFlight += received
     received.sender ! new ElementAccepted(context.self, received)
-    timers.startSingleTimer(received, ElementTimedOut(received), serverRequestTimeout)
+    timers.startSingleTimer(received, ElementTimedOut(received, clock()), serverRequestTimeout)
   }
 }

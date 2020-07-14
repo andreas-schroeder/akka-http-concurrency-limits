@@ -43,9 +43,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     }
 
     "ask limiter actor when request-in is pushed" in new PulledLimitBidiFlow {
-      println("INVOKING START")
       start()
-      println("INVOKING START DONE")
       in.sendNext("One")
       probe.expectMessageType[Element[String]]
     }
@@ -199,53 +197,4 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       replyProbe
     }
   }
-
-  /*
-  "it" should {
-    "limit" ignore {
-
-      val limit = new SettableLimit(5)
-
-      val limiter = system.systemActorOf(LimitActor.liFoQueued(limit, 10, _ => 100.millis), "limiter")
-
-      val limitFlow = GlobalLimitBidiFlow(limiter)
-
-      val counter = new AtomicInteger
-
-      implicit val sys = system.toClassic
-      implicit val ec = sys.dispatcher
-      implicit val mat = Materializer(sys)
-
-      val routes = pathSingleSlash {
-        get {
-          val cnt = counter.incrementAndGet()
-          val delay =
-            if (cnt >= 210) {
-              20.millis
-            } else if (cnt >= 200) {
-              3.seconds
-            } else {
-              20.millis
-            }
-          complete(pattern.after(delay, system.scheduler.toClassic)(Future.successful("Ok")))
-        }
-      }
-
-      Await.ready(Http().bindAndHandle(limitFlow.join(routes), "0.0.0.0", 8080), 2.seconds)
-
-      for (i <- 1 to 600) {
-        Thread.sleep(20)
-        val response = Http().singleRequest(Get("http://localhost:8080/"))
-        println(s"$i - Request")
-
-        response.andThen {
-          case Success(r) => println(s"$i - ${r.status}")
-          case Failure(t) => println(s"$i - failed: ${t.getMessage}")
-        }
-      }
-
-      Thread.sleep(200000)
-    }
-  }
- */
 }
