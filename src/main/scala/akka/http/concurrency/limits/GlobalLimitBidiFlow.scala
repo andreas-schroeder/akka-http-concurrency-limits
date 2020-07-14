@@ -4,7 +4,7 @@ import akka.NotUsed
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.actor.typed.scaladsl.adapter._
 import akka.actor.typed.{ActorRef, Scheduler}
-import akka.http.concurrency.limits.GlobalLimitBidiFlow.LimitShape
+import akka.http.concurrency.limits.GlobalLimitBidiFlow.{InFlight, LimitShape}
 import akka.http.concurrency.limits.LimitActor._
 import akka.http.concurrency.limits.LimitBidiFolow.{Dropped, Ignored, Outcome, Processed}
 import akka.stream.impl.Buffer
@@ -26,6 +26,8 @@ object GlobalLimitBidiFlow {
     BidiFlow.fromGraph(new GlobalLimitBidi(limiter, rejection, result, parallelism, timeout))
 
   type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
+
+  final class InFlight[T](val accepted: ElementAccepted[T], val startTime: Long)
 }
 
 class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
@@ -46,7 +48,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var inFlightAccepted: Buffer[ElementAccepted[In]] = _
+    var inFlightAccepted: Buffer[InFlight[In]] = _
     var pullSuppressed = false
 
     implicit val askTimeout: Timeout = Timeout(timeout)
@@ -75,8 +77,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
 
     private val limiterResponse = createAsyncCallback[Try[LimitActorResponse[In]]] {
       case Success(accept: ElementAccepted[In]) =>
-        inFlightAccepted.enqueue(accept)
-        accept.startTime = clock()
+        inFlightAccepted.enqueue(new InFlight[In](accept, clock()))
         push(toWrapped, accept.value)
 
       case Success(ElementRejected(element)) => push(out, rejection(element))
@@ -97,10 +98,11 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
           val response = grab(fromWrapped)
           // ignores the time it takes to stream the response body to clients on purpose to avoid
           // slow clients or network to be considered in server response latency measurements.
-          val accepted = inFlightAccepted.dequeue()
+          val inflight = inFlightAccepted.dequeue()
+          import inflight._
           result(response) match {
-            case Processed => accepted.success(clock())
-            case Dropped   => accepted.dropped(clock())
+            case Processed => accepted.success(startTime, clock())
+            case Dropped   => accepted.dropped(startTime, clock())
             case Ignored   => accepted.ignore()
           }
           push(out, response)
@@ -124,7 +126,8 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
     // Akka Http tears down the request handler flow on request timeout, and therefore
     // any in-flight request at this time was dropped.
     override def postStop(): Unit = while (inFlightAccepted.nonEmpty) {
-      inFlightAccepted.dequeue().dropped(clock())
+      val inFlight = inFlightAccepted.dequeue()
+      inFlight.accepted.dropped(inFlight.startTime, clock())
     }
   }
 }

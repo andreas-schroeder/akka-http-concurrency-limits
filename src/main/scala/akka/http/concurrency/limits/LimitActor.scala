@@ -43,11 +43,9 @@ object LimitActor {
 
     def value: T = element.value
 
-    var startTime: Long = _
+    def success(startTime: Long, endTime: Long): Unit = actor ! Replied(startTime, endTime - startTime, didDrop = false, element)
 
-    def success(endTime: Long): Unit = actor ! Replied(startTime, endTime - startTime, didDrop = false, element)
-
-    def dropped(endTime: Long): Unit = actor ! Replied(startTime, endTime - startTime, didDrop = true, element)
+    def dropped(startTime: Long, endTime: Long): Unit = actor ! Replied(startTime, endTime - startTime, didDrop = true, element)
 
     def ignore(): Unit = actor ! Ignore(element)
   }
