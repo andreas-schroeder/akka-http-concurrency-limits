@@ -12,10 +12,10 @@ import com.netflix.concurrency.limits.Limit
 object LocalLimitBidiFlow {
 
   def apply[In, Out](limitAlgorithm: () => Limit,
+                     parallelism: Int,
                      rejection: In => Out,
-                     result: Out => Outcome = (_: Out) => Processed,
-                     parallelism: Int): BidiFlow[In, In, Out, Out, NotUsed] =
-    BidiFlow.fromGraph(new LocalLimitBidi(limitAlgorithm, rejection, result, parallelism))
+                     result: Out => Outcome = (_: Out) => Processed): BidiFlow[In, In, Out, Out, NotUsed] =
+    BidiFlow.fromGraph(new LocalLimitBidi(limitAlgorithm, parallelism, rejection, result))
 
   class InFlightElement(val startTime: Long)
 
@@ -32,9 +32,9 @@ object LocalLimitBidiFlow {
 }
 
 class LocalLimitBidi[In, Out](limitAlgorithm: () => Limit,
+                              parallelism: Int,
                               rejection: In => Out,
                               result: Out => Outcome,
-                              parallelism: Int,
                               clock: () => Long = () => System.nanoTime())
     extends GraphStage[LimitShape[In, Out]] {
 

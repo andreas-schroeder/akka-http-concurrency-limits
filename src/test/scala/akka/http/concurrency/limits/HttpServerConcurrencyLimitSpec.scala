@@ -1,12 +1,10 @@
 package akka.http.concurrency.limits
 
-import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.client.RequestBuilding._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.scaladsl.{Sink, Source}
 import com.netflix.concurrency.limits.limit.SettableLimit
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -20,7 +18,7 @@ class HttpServerConcurrencyLimitSpec extends AnyWordSpec with Matchers {
   def withLimitedServer(limit: Int, route: Route)(body: ActorSystem => Unit): Unit = {
     implicit val system: ActorSystem = ActorSystem()
 
-    val config = HttpConcurrencyLimitConfig(new SettableLimit(10))
+    val config = HttpLiFoQueuedConcurrencyLimitConfig(new SettableLimit(10))
     val limitFlow = HttpServerConcurrencyLimit.liFoQueued(config)
 
     Await.ready(Http().bindAndHandle(limitFlow join route, "0.0.0.0", 8080), 2.seconds)

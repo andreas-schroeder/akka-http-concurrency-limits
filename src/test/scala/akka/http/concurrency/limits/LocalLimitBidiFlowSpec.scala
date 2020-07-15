@@ -2,6 +2,7 @@ package akka.http.concurrency.limits
 
 import java.util.concurrent.atomic.AtomicBoolean
 
+import akka.actor.ActorSystem
 import akka.actor.testkit.typed.scaladsl.{ManualTime, ScalaTestWithActorTestKit}
 import akka.actor.typed.scaladsl.adapter._
 import akka.http.concurrency.limits.LimitBidiFolow._
@@ -9,9 +10,12 @@ import akka.stream.Materializer
 import akka.stream.scaladsl.{BidiFlow, Flow, Sink, Source}
 import akka.stream.testkit.{TestPublisher, TestSubscriber}
 import com.netflix.concurrency.limits.Limit
-import com.netflix.concurrency.limits.limit.SettableLimit
+import com.netflix.concurrency.limits.limit.{FixedLimit, SettableLimit}
 import org.mockito.{ArgumentMatchersSugar, MockitoSugar}
 import org.scalatest.wordspec.AnyWordSpecLike
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration._
 
 object LocalLimitBidiFlowSpec {
   val config: String =
@@ -25,7 +29,11 @@ object LocalLimitBidiFlowSpec {
 }
 
 //noinspection TypeAnnotation
-class LocalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(LocalLimitBidiFlowSpec.config) with AnyWordSpecLike with MockitoSugar with ArgumentMatchersSugar {
+class LocalLimitBidiFlowSpec
+    extends ScalaTestWithActorTestKit(LocalLimitBidiFlowSpec.config)
+    with AnyWordSpecLike
+    with MockitoSugar
+    with ArgumentMatchersSugar {
 
   val manualTime: ManualTime = ManualTime()
 
@@ -101,6 +109,27 @@ class LocalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(LocalLimitBidiFlo
       responseIn.sendNext("Got Two")
       verify(limit).onSample(2L, 0L, 0, false)
     }
+
+    "throttle mapAsync" in {
+      implicit val sys = ActorSystem()
+      implicit val mat = Materializer(sys)
+      implicit val ec = sys.dispatcher
+
+      val parallelism = 20
+      val limitFlow =
+        LocalLimitBidiFlow[Int, String](() => FixedLimit.of(10), parallelism, _ => "Rejected", _ => Processed)
+
+      val mapAsync = Flow[Int].mapAsyncUnordered(parallelism) { _ =>
+        akka.pattern.after(10.millis, sys.scheduler)(Future("Accepted"))
+      }
+
+      val eventualResults =
+        Source.repeat(1).take(20).via(limitFlow join mapAsync).runWith(Sink.collection)
+      val results = Await.result(eventualResults, 4.seconds).toSeq
+
+      results.count(_ == "Accepted") shouldBe 10
+      results.count(_ == "Rejected") shouldBe 10
+    }
   }
 
   def mockLimitWithCapacity(capacity: Int) = {
@@ -108,7 +137,6 @@ class LocalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(LocalLimitBidiFlo
     when(limit.getLimit).thenReturn(capacity)
     limit
   }
-
 
   //noinspection TypeAnnotation
   trait ConnectedLimitBidiFlow {
@@ -136,7 +164,7 @@ class LocalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(LocalLimitBidiFlo
       }
 
       val testSetup = BidiFlow.fromGraph(
-        new LocalLimitBidi[String, String](() => limit, s => s"Rejected $s", verdict, 2, clock)
+        new LocalLimitBidi[String, String](() => limit, 2, s => s"Rejected $s", verdict, clock)
       ) join Flow
         .fromSinkAndSource(Sink.fromSubscriber(requestOut), Source.fromPublisher(responseIn))
 

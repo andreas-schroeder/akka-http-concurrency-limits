@@ -19,7 +19,7 @@ object Benchmarks {
 
   def main(args: Array[String]): Unit = {
     implicit val system: ActorSystem = ActorSystem()
-    val config = HttpConcurrencyLimitConfig(new SettableLimit(256))
+    val config = HttpLiFoQueuedConcurrencyLimitConfig(new SettableLimit(256))
     val limitFlow: LimitFlow = HttpServerConcurrencyLimit.liFoQueued(config)
 
     val b1 = compareRoutes("immediate routes", immediateRoute, limitFlow)
