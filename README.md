@@ -1,5 +1,7 @@
 # Akka Http Concurrency Limits
 
+[![Build Status](https://travis-ci.org/andreas-schroeder/akka-http-concurrency-limits.svg?branch=master)](https://travis-ci.org/andreas-schroeder/akka-http-concurrency-limits)
+
 [Akka http](https://github.com/akka/akka-http) implementation for Netflix's [adaptive concurrency limits](https://github.com/Netflix/concurrency-limits).
 
 In good reactive manner, this adapter avoids blocking threads and synchronization by
