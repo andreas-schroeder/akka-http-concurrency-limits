@@ -1,7 +1,5 @@
 package akka.http.concurrency.limits
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl._
 import akka.http.concurrency.limits.LimitActor._
@@ -11,11 +9,12 @@ import scala.collection.mutable
 import scala.concurrent.duration._
 
 class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
-                           maxLiFoQueueDepth: Int,
-                           maxDelay: T => FiniteDuration,
-                           context: ActorContext[LimitActorCommand[T]],
-                           timers: TimerScheduler[LimitActorCommand[T]],
-                           clock: () => Long = () => System.nanoTime())
+                              maxLiFoQueueDepth: Int,
+                              maxDelay: T => FiniteDuration,
+                              timeout: FiniteDuration,
+                              context: ActorContext[LimitActorCommand[T]],
+                              timers: TimerScheduler[LimitActorCommand[T]],
+                              clock: () => Long = () => System.nanoTime())
     extends AbstractBehavior[LimitActorCommand[T]](context) {
 
   private val inFlight: mutable.Set[Element[T]] = mutable.Set.empty
@@ -23,14 +22,9 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
   private var limit: Int = limitAlgorithm.getLimit
   limitAlgorithm.notifyOnChange(l => limit = l)
 
-  val serverRequestTimeout: FiniteDuration = {
-    val timeout = context.system.settings.config.getDuration("akka.http.server.request-timeout")
-    FiniteDuration(timeout.toNanos, TimeUnit.NANOSECONDS)
-  }
-
   def onMessage(command: LimitActorCommand[T]): Behavior[LimitActorCommand[T]] = command match {
     case received: Element[T] =>
-      if (inFlight.size < limit) acceptRequest(received) else throttleOrDelay(received)
+      if (inFlight.size < limit) acceptRequest(received) else rejectOrDelay(received)
       this
 
     case ElementTimedOut(element, startTime) =>
@@ -41,9 +35,9 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
       }
       this
 
-    case MaxDelayPassed(sender, received) =>
-      sender ! ElementRejected(received.value)
-      throttledLiFoQueue.filterInPlace(_ eq received)
+    case MaxDelayPassed(elem) =>
+      elem.sender ! ElementRejected(elem.value)
+      throttledLiFoQueue.filterInPlace(_ eq elem)
       this
 
     case Replied(start, duration, didDrop, id) =>
@@ -64,13 +58,13 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
       this
   }
 
-  private def throttleOrDelay(received: Element[T]): Unit = {
-    val delay = maxDelay(received.value)
+  private def rejectOrDelay(element: Element[T]): Unit = {
+    val delay = maxDelay(element.value)
     if (delay.length == 0 || throttledLiFoQueue.size >= maxLiFoQueueDepth * limit) {
-      received.sender ! ElementRejected(received.value)
+      element.sender ! ElementRejected(element.value)
     } else {
-      throttledLiFoQueue.push(received)
-      timers.startSingleTimer(received, MaxDelayPassed(received.sender, received), delay)
+      throttledLiFoQueue.push(element)
+      timers.startSingleTimer(element, MaxDelayPassed(element), delay)
     }
   }
 
@@ -80,9 +74,9 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
     acceptRequest(request)
   }
 
-  private def acceptRequest(received: Element[T]): Unit = {
-    inFlight += received
-    received.sender ! new ElementAccepted(context.self, received)
-    timers.startSingleTimer(received, ElementTimedOut(received, clock()), serverRequestTimeout)
+  private def acceptRequest(element: Element[T]): Unit = {
+    inFlight += element
+    element.sender ! new ElementAccepted(context.self, element)
+    timers.startSingleTimer(element, ElementTimedOut(element, clock()), timeout)
   }
 }

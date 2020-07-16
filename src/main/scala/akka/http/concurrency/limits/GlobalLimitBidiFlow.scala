@@ -21,9 +21,9 @@ object GlobalLimitBidiFlow {
   def apply[In, Out](limiter: ActorRef[Element[In]],
                      parallelism: Int,
                      timeout: FiniteDuration,
-                     rejection: In => Out,
+                     rejectionResponse: In => Out,
                      result: Out => Outcome = (_: Out) => Processed): BidiFlow[In, In, Out, Out, NotUsed] =
-    BidiFlow.fromGraph(new GlobalLimitBidi(limiter, rejection, result, parallelism, timeout))
+    BidiFlow.fromGraph(new GlobalLimitBidi(limiter, rejectionResponse, result, parallelism, timeout))
 
   type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
 
@@ -31,7 +31,7 @@ object GlobalLimitBidiFlow {
 }
 
 class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
-                               rejection: In => Out,
+                               rejectionResponse: In => Out,
                                result: Out => Outcome,
                                parallelism: Int,
                                timeout: FiniteDuration,
@@ -80,7 +80,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
         inFlightAccepted.enqueue(new InFlight[In](accept, clock()))
         push(toWrapped, accept.value)
 
-      case Success(ElementRejected(element)) => push(out, rejection(element))
+      case Success(ElementRejected(element)) => push(out, rejectionResponse(element))
       case Failure(ex)                       => failStage(ex)
     }
 

@@ -24,10 +24,10 @@ object HttpServerConcurrencyLimit {
 
     val limitActor: ActorRef[LimitActor.Element[HttpRequest]] =
       typed.systemActorOf(
-        LimitActor.liFoQueued(config.limitAlgorithm, config.maxLiFoQueueDepth, config.maxDelay),
+        LimitActor.liFoQueued(config.limitAlgorithm, config.maxLiFoQueueDepth, config.maxDelay, config.reqestTimeout),
         config.name
       )
-    GlobalLimitBidiFlow(limitActor, config.pipeliningLimit, config.reqestTimeout, config.response, config.result)
+    GlobalLimitBidiFlow(limitActor, config.pipeliningLimit, config.reqestTimeout, config.rejectionResponse, config.result)
   }
 
   val TooManyRequestsResponse: HttpResponse = HttpResponse(StatusCodes.TooManyRequests, entity = "Too many requests")
@@ -39,7 +39,7 @@ final case class HttpLiFoQueuedConcurrencyLimitConfig(limitAlgorithm: Limit,
                                                       pipeliningLimit: Int,
                                                       reqestTimeout: FiniteDuration,
                                                       maxDelay: HttpRequest => FiniteDuration,
-                                                      response: HttpRequest => HttpResponse,
+                                                      rejectionResponse: HttpRequest => HttpResponse,
                                                       result: HttpResponse => Outcome)
 
 object HttpLiFoQueuedConcurrencyLimitConfig {
@@ -65,21 +65,21 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     *
     * @param limitAlgorithm the limit algorithm to use.
     * @param maxLiFoQueueDepth max queue depth - this is multiplied with the current concurrency limit to determine
-   *                          queue length.
+    *                          queue length.
     * @param maxDelay the maximum time to wait in the lifo queue for available capacity.
-    * @param response rejection response function to apply when rejecting an element.
+    * @param rejectionResponse function to compute the response to give when rejecting a request.
     * @param result how to evaluate the response in terms of latency: was the request dropped, was it successfully
-   *               processed, or should it be ignored for computing the adaptive concurrency limit
+    *               processed, or should it be ignored for computing the adaptive concurrency limit
     * @param name name of the limit actor. Must be globally unique. Specify if you need to create more than one
-   *             server limiter.
+    *             server limiter.
     * @param system the actor system to use. This is used to fetch request timeout and pipelining limits from the akka
-   *               http server config.
+    *               http server config.
     */
   def apply(
     limitAlgorithm: Limit,
     maxLiFoQueueDepth: Int = 16,
     maxDelay: HttpRequest => FiniteDuration = _ => 50.millis,
-    response: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
+    rejectionResponse: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
     result: HttpResponse => Outcome = DefaultResult,
     name: String = "http-server-limiter"
   )(implicit system: ActorSystem): HttpLiFoQueuedConcurrencyLimitConfig = {
@@ -96,7 +96,7 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
       pipeliningLimit,
       reqestTimeout,
       maxDelay,
-      response,
+      rejectionResponse,
       result
     )
   }

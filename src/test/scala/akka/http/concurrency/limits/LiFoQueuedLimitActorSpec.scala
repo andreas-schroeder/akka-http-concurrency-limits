@@ -17,7 +17,6 @@ object LiFoQueuedLimitActorSpec {
   val config: String =
     """
       |akka.scheduler.implementation = "akka.testkit.ExplicitlyTriggeredScheduler"
-      |akka.http.server.request-timeout = 2s
       |akka.actor.default-dispatcher = { type = "akka.testkit.CallingThreadDispatcherConfigurator" }
       |""".stripMargin
 }
@@ -29,9 +28,10 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
   def spawnActorAndProbe(
     limit: Limit = new SettableLimit(1),
     maxQueueDepth: Int = 1,
-    maxDelay: String => FiniteDuration = _ => 0.millis
+    maxDelay: String => FiniteDuration = _ => 0.millis,
+    timeout: FiniteDuration = 2.seconds
   ): (ActorRef[Element[String]], TestProbe[LimitActorResponse[String]]) =
-    (spawn(LimitActor.liFoQueued(limit, maxQueueDepth, maxDelay)), TestProbe[LimitActorResponse[String]]())
+    (spawn(LimitActor.liFoQueued(limit, maxQueueDepth, maxDelay, timeout)), TestProbe[LimitActorResponse[String]]())
 
   def element(probe: TestProbe[LimitActorResponse[String]],
               value: String = "One"): Element[String] = Element(probe.ref, value)
