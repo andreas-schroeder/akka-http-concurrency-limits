@@ -23,7 +23,7 @@ inThisBuild(List(
   organization := "io.github.andreas-schroeder",
   homepage := Some(url("https://github.com/andreas-schroeder/akka-http-concurrency-limits")),
   licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-  sonatypeProfileName := "io.github.andreas-schroeder",
+  sonatypeProfileName := "andreas-schroeder",
   developers := List(
     Developer(
       "andreas-schroeder",
