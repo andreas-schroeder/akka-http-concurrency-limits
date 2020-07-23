@@ -19,3 +19,16 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-stream-testkit" % akkaVersion % Test
 )
 
+inThisBuild(List(
+  organization := "io.github.andreas-schroeder",
+  homepage := Some(url("https://github.com/andreas-schroeder/akka-http-concurrency-limits")),
+  licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+  developers := List(
+    Developer(
+      "andreas-schroeder",
+      "Andreas Schroeder",
+      "andreas.c.schroeder@gmail.com",
+      url("https://github.com/andreas-schroeder")
+    )
+  )
+))
