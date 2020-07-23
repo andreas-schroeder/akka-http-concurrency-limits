@@ -1,6 +1,6 @@
 version := "0.0.1"
 
-organization := "com.github.andreas-schroeder"
+organization := "io.github.andreas-schroeder"
 
 scalaVersion := "2.13.3"
 
@@ -23,7 +23,6 @@ inThisBuild(List(
   organization := "io.github.andreas-schroeder",
   homepage := Some(url("https://github.com/andreas-schroeder/akka-http-concurrency-limits")),
   licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-  sonatypeProfileName := "andreas-schroeder",
   developers := List(
     Developer(
       "andreas-schroeder",
