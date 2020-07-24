@@ -7,7 +7,7 @@
 [Akka http](https://github.com/akka/akka-http) implementation for Netflix's [adaptive concurrency limits](https://github.com/Netflix/concurrency-limits).
 
 In good reactive manner, this adapter avoids blocking threads and synchronization by
-using akka stream primitives and actors.
+using Akka Streams primitives and actors.
 
 ## When To Use Concurrency Limits
 
