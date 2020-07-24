@@ -24,7 +24,7 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
 
   def onMessage(command: LimitActorCommand[T]): Behavior[LimitActorCommand[T]] = command match {
     case received: Element[T] =>
-      if (inFlight.size < limit) acceptRequest(received) else rejectOrDelay(received)
+      if (inFlight.size < limit) acceptElement(received) else rejectOrDelay(received)
       this
 
     case ElementTimedOut(element, startTime) =>
@@ -69,12 +69,12 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
   }
 
   def maybeAcceptNext(): Unit = if (inFlight.size < limit && throttledLiFoQueue.nonEmpty) {
-    val request = throttledLiFoQueue.pop()
-    timers.cancel(request)
-    acceptRequest(request)
+    val element = throttledLiFoQueue.pop()
+    timers.cancel(element)
+    acceptElement(element)
   }
 
-  private def acceptRequest(element: Element[T]): Unit = {
+  private def acceptElement(element: Element[T]): Unit = {
     inFlight += element
     element.sender ! new ElementAccepted(context.self, element)
     timers.startSingleTimer(element, ElementTimedOut(element, clock()), timeout)
