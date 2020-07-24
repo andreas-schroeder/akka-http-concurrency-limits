@@ -27,7 +27,7 @@ inThisBuild(List(
     Developer(
       "andreas-schroeder",
       "Andreas Schroeder",
-      "andreas.c.schroeder@gmail.com",
+      sys.env.getOrElse("E_MAIL", "john.doe@example.com"),
       url("https://github.com/andreas-schroeder")
     )
   )
