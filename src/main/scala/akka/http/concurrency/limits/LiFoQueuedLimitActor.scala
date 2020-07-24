@@ -8,27 +8,27 @@ import com.netflix.concurrency.limits.Limit
 import scala.collection.mutable
 import scala.concurrent.duration._
 
-class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
+class LiFoQueuedLimitActor(limitAlgorithm: Limit,
                               maxLiFoQueueDepth: Int,
-                              maxDelay: T => FiniteDuration,
+                              maxDelay: FiniteDuration,
                               timeout: FiniteDuration,
-                              context: ActorContext[LimitActorCommand[T]],
-                              timers: TimerScheduler[LimitActorCommand[T]],
+                              context: ActorContext[LimitActorCommand],
+                              timers: TimerScheduler[LimitActorCommand],
                               clock: () => Long = () => System.nanoTime())
-    extends AbstractBehavior[LimitActorCommand[T]](context) {
+    extends AbstractBehavior[LimitActorCommand](context) {
 
-  private val inFlight: mutable.Set[Element[T]] = mutable.Set.empty
-  private val throttledLiFoQueue: mutable.Stack[Element[T]] = mutable.Stack.empty
+  private val inFlight: mutable.Set[Id] = mutable.Set.empty
+  private val throttledLiFoQueue: mutable.Stack[Element] = mutable.Stack.empty
   private var limit: Int = limitAlgorithm.getLimit
   limitAlgorithm.notifyOnChange(l => limit = l)
 
-  def onMessage(command: LimitActorCommand[T]): Behavior[LimitActorCommand[T]] = command match {
-    case received: Element[T] =>
+  def onMessage(command: LimitActorCommand): Behavior[LimitActorCommand] = command match {
+    case received: Element =>
       if (inFlight.size < limit) acceptElement(received) else rejectOrDelay(received)
       this
 
     case ElementTimedOut(element, startTime) =>
-      if (inFlight.remove(element)) {
+      if (inFlight.remove(element.id)) {
         // raciness: timeout vs regular response are intentionally concurrent.
         limitAlgorithm.onSample(startTime, clock() - startTime, inFlight.size, true)
         maybeAcceptNext()
@@ -36,47 +36,46 @@ class LiFoQueuedLimitActor[T](limitAlgorithm: Limit,
       this
 
     case MaxDelayPassed(elem) =>
-      elem.sender ! ElementRejected(elem.value)
-      throttledLiFoQueue.filterInPlace(_ eq elem)
+      elem.sender ! ElementRejected
+      throttledLiFoQueue.filterInPlace(_.id eq elem.id)
       this
 
-    case Replied(start, duration, didDrop, id) =>
-      if (inFlight.remove(id)) {
+    case Replied(start, duration, didDrop, elem) =>
+      if (inFlight.remove(elem.id)) {
         // raciness: timeout vs regular response are intentionally concurrent.
-        timers.cancel(id)
+        timers.cancel(elem.id)
         limitAlgorithm.onSample(start, duration, inFlight.size, didDrop)
         maybeAcceptNext()
       }
       this
 
-    case Ignore(id) =>
+    case Ignore(elem) =>
       // raciness: timeout vs regular response are intentionally concurrent.
-      if (inFlight.remove(id)) {
-        timers.cancel(id)
+      if (inFlight.remove(elem.id)) {
+        timers.cancel(elem.id)
         maybeAcceptNext()
       }
       this
   }
 
-  private def rejectOrDelay(element: Element[T]): Unit = {
-    val delay = maxDelay(element.value)
-    if (delay.length == 0 || throttledLiFoQueue.size >= maxLiFoQueueDepth * limit) {
-      element.sender ! ElementRejected(element.value)
+  private def rejectOrDelay(element: Element): Unit = {
+    if (maxDelay.length == 0 || throttledLiFoQueue.size >= maxLiFoQueueDepth * limit) {
+      element.sender ! ElementRejected
     } else {
       throttledLiFoQueue.push(element)
-      timers.startSingleTimer(element, MaxDelayPassed(element), delay)
+      timers.startSingleTimer(element.id, MaxDelayPassed(element), maxDelay)
     }
   }
 
   def maybeAcceptNext(): Unit = if (inFlight.size < limit && throttledLiFoQueue.nonEmpty) {
     val element = throttledLiFoQueue.pop()
-    timers.cancel(element)
+    timers.cancel(element.id)
     acceptElement(element)
   }
 
-  private def acceptElement(element: Element[T]): Unit = {
-    inFlight += element
+  private def acceptElement(element: Element): Unit = {
+    inFlight += element.id
     element.sender ! new ElementAccepted(context.self, element)
-    timers.startSingleTimer(element, ElementTimedOut(element, clock()), timeout)
+    timers.startSingleTimer(element.id, ElementTimedOut(element, clock()), timeout)
   }
 }

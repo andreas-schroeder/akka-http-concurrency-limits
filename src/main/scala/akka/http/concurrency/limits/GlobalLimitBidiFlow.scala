@@ -18,7 +18,7 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success, Try}
 
 object GlobalLimitBidiFlow {
-  def apply[In, Out](limiter: ActorRef[Element[In]],
+  def apply[In, Out](limiter: ActorRef[Element],
                      parallelism: Int,
                      timeout: FiniteDuration,
                      rejectionResponse: In => Out,
@@ -27,10 +27,10 @@ object GlobalLimitBidiFlow {
 
   type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
 
-  final class InFlight[T](val accepted: ElementAccepted[T], val startTime: Long)
+  final class InFlight(val accepted: ElementAccepted, val startTime: Long)
 }
 
-class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
+class GlobalLimitBidi[In, Out](limiter: ActorRef[Element],
                                rejectionResponse: In => Out,
                                result: Out => Outcome,
                                parallelism: Int,
@@ -48,7 +48,8 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
 
   def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
 
-    var inFlightAccepted: Buffer[InFlight[In]] = _
+    var pendingElement: In = _
+    var inFlightAccepted: Buffer[InFlight] = _
     var pullSuppressed = false
 
     implicit val askTimeout: Timeout = Timeout(timeout)
@@ -66,21 +67,21 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element[In]],
       in,
       new InHandler {
         def onPush(): Unit = {
-          val value = grab(in)
+          pendingElement = grab(in)
           limiter
-            .ask[LimitActorResponse[In]](sender => Element(sender, value))
+            .ask[LimitActorResponse](sender => Element(sender))
             .onComplete(limiterResponse.invoke)
         }
         override def onUpstreamFinish(): Unit = complete(toWrapped)
       }
     )
 
-    private val limiterResponse = createAsyncCallback[Try[LimitActorResponse[In]]] {
-      case Success(accept: ElementAccepted[In]) =>
-        inFlightAccepted.enqueue(new InFlight[In](accept, clock()))
-        push(toWrapped, accept.value)
+    private val limiterResponse = createAsyncCallback[Try[LimitActorResponse]] {
+      case Success(accept: ElementAccepted) =>
+        inFlightAccepted.enqueue(new InFlight(accept, clock()))
+        push(toWrapped, pendingElement)
 
-      case Success(ElementRejected(element)) => push(out, rejectionResponse(element))
+      case Success(ElementRejected) => push(out, rejectionResponse(pendingElement))
       case Failure(ex)                       => failStage(ex)
     }
 

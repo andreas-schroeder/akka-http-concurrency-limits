@@ -22,7 +22,7 @@ object HttpServerConcurrencyLimit {
 
     val typed = system.toTyped
 
-    val limitActor: ActorRef[LimitActor.Element[HttpRequest]] =
+    val limitActor: ActorRef[LimitActor.Element] =
       typed.systemActorOf(
         LimitActor.liFoQueued(config.limitAlgorithm, config.maxLiFoQueueDepth, config.maxDelay, config.reqestTimeout),
         config.name
@@ -38,7 +38,7 @@ final case class HttpLiFoQueuedConcurrencyLimitConfig(limitAlgorithm: Limit,
                                                       name: String,
                                                       pipeliningLimit: Int,
                                                       reqestTimeout: FiniteDuration,
-                                                      maxDelay: HttpRequest => FiniteDuration,
+                                                      maxDelay: FiniteDuration,
                                                       rejectionResponse: HttpRequest => HttpResponse,
                                                       result: HttpResponse => Outcome)
 
@@ -78,7 +78,7 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
   def apply(
     limitAlgorithm: Limit,
     maxLiFoQueueDepth: Int = 16,
-    maxDelay: HttpRequest => FiniteDuration = _ => 50.millis,
+    maxDelay: FiniteDuration = 50.millis,
     rejectionResponse: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
     result: HttpResponse => Outcome = DefaultResult,
     name: String = "http-server-limiter"

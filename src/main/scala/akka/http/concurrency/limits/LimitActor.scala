@@ -14,12 +14,12 @@ object LimitActor {
     * @param maxLiFoQueueDepth max depth of the LiFo queue - gets multiplied with current limit to compute max queue length.
     * @param maxDelay compute max acceptable delay for requests to queue for being accepted.
     */
-  def liFoQueued[T](limitAlgorithm: Limit,
+  def liFoQueued(limitAlgorithm: Limit,
                     maxLiFoQueueDepth: Int,
-                    maxDelay: T => FiniteDuration = (_: T) => 0.nanos,
-                    timeout: FiniteDuration = 1.second): Behavior[Element[T]] =
+                    maxDelay: FiniteDuration = 0.nanos,
+                    timeout: FiniteDuration = 1.second): Behavior[Element] =
     Behaviors
-      .setup[LimitActorCommand[T]](
+      .setup[LimitActorCommand](
         ctx =>
           Behaviors
             .withTimers(
@@ -28,21 +28,21 @@ object LimitActor {
       )
       .narrow
 
-  sealed trait LimitActorCommand[T]
+  sealed trait LimitActorCommand
 
-  case class Element[T](sender: ActorRef[LimitActorResponse[T]], value: T) extends LimitActorCommand[T]
+  case class Element(sender: ActorRef[LimitActorResponse], id: Id = new Id) extends LimitActorCommand
 
-  case class Replied[T](startTime: Long, duration: Long, didDrop: Boolean, element: Element[T])
-      extends LimitActorCommand[T]
-  case class Ignore[T](element: Element[T]) extends LimitActorCommand[T]
-  case class ElementTimedOut[T](element: Element[T], startTime: Long) extends LimitActorCommand[T]
-  case class MaxDelayPassed[T](element: Element[T]) extends LimitActorCommand[T]
+  final class Id
 
-  sealed trait LimitActorResponse[T]
+  case class Replied(startTime: Long, duration: Long, didDrop: Boolean, element: Element)
+      extends LimitActorCommand
+  case class Ignore(element: Element) extends LimitActorCommand
+  case class ElementTimedOut(element: Element, startTime: Long) extends LimitActorCommand
+  case class MaxDelayPassed(element: Element) extends LimitActorCommand
 
-  class ElementAccepted[T](actor: ActorRef[LimitActorCommand[T]], element: Element[T]) extends LimitActorResponse[T] {
+  sealed trait LimitActorResponse
 
-    def value: T = element.value
+  class ElementAccepted(actor: ActorRef[LimitActorCommand], element: Element) extends LimitActorResponse {
 
     def success(startTime: Long, endTime: Long): Unit =
       actor ! Replied(startTime, endTime - startTime, didDrop = false, element)
@@ -53,5 +53,5 @@ object LimitActor {
     def ignore(): Unit = actor ! Ignore(element)
   }
 
-  case class ElementRejected[T](value: T) extends LimitActorResponse[T]
+  case object ElementRejected extends LimitActorResponse
 }

@@ -45,14 +45,14 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "ask limiter actor when request-in is pushed" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      probe.expectMessageType[Element[String]]
+      probe.expectMessageType[Element]
     }
 
     "reject request when limiter actor replies with reject" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      val received = probe.expectMessageType[Element[String]]
-      received.sender ! ElementRejected("One")
+      val received = probe.expectMessageType[Element]
+      received.sender ! ElementRejected
 
       out.expectNext() shouldBe "Rejected One"
     }
@@ -88,7 +88,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       val replyProbe = acceptRequest()
       fromWrapped.sendNext("One Response")
 
-      val replied = replyProbe.expectMessageType[Replied[String]]
+      val replied = replyProbe.expectMessageType[Replied]
       replied.startTime shouldBe 5L
       replied.duration shouldBe 45L
       replied.didDrop shouldBe false
@@ -100,7 +100,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       val replyProbe = acceptRequest()
       fromWrapped.sendNext("Ignore")
 
-      replyProbe.expectMessageType[Ignore[String]]
+      replyProbe.expectMessageType[Ignore]
     }
 
     "Announce request drop if stage stops (e.g. due to stage completion)" in new PulledLimitBidiFlow {
@@ -113,7 +113,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       out.cancel()
       in.sendComplete()
 
-      val replied = replyProbe.expectMessageType[Replied[String]]
+      val replied = replyProbe.expectMessageType[Replied]
       replied.didDrop shouldBe true
     }
 
@@ -133,12 +133,12 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       // first response provided
       fromWrapped.sendNext("One Response")
       out.expectNext()
-      replyProbe1.expectMessageType[Replied[String]].element.value shouldBe "One"
+      replyProbe1.expectMessageType[Replied]
 
       // second response provided
       out.request(1)
       fromWrapped.sendNext("Two Response")
-      replyProbe2.expectMessageType[Replied[String]].element.value shouldBe "Two"
+      replyProbe2.expectMessageType[Replied]
     }
   }
 
@@ -150,7 +150,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     val toWrapped = TestSubscriber.probe[String]()
     val fromWrapped = TestPublisher.probe[String]()
     val out = TestSubscriber.probe[String]()
-    val probe = TestProbe[Element[String]]()
+    val probe = TestProbe[Element]()
 
     def start(startTime: Long = 1L, replyTime: Long = 2L) = {
       val verdict: String => Outcome = {
@@ -190,9 +190,9 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       toWrapped.request(1)
     }
 
-    def acceptRequest(): TestProbe[LimitActorCommand[String]] = {
-      val received = probe.expectMessageType[Element[String]]
-      val replyProbe = TestProbe[LimitActorCommand[String]]()
+    def acceptRequest(): TestProbe[LimitActorCommand] = {
+      val received = probe.expectMessageType[Element]
+      val replyProbe = TestProbe[LimitActorCommand]()
       received.sender ! new ElementAccepted(replyProbe.ref, received)
       replyProbe
     }
