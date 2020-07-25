@@ -70,6 +70,7 @@ limit. The `config` object allows to modify the behavior of the global concurren
 | limitAlgorithm    | the limit algorithm to use. | none |
 | maxLiFoQueueDepth | max queue depth - this is multiplied with the current concurrency limit to determine queue length. | 16 |
 | maxDelay          | the maximum time to wait in the lifo queue for available capacity. | 50 ms |
+| weight            | relative processing cost of request to adjust latency measurements. | 1 |
 | rejectionResponse | function to compute the response to give when rejecting a request. | Http 429 - too many requests |
 | result            | how to evaluate the response in terms of latency: was the request dropped, was it successfully processed, or should it be ignored for computing the adaptive concurrency limit. | ignore client and server errors, measure all others |
 | name              | name of the limit actor. Must be globally unique. Specify if you need to create more than one server limiter. | http-server-limiter |

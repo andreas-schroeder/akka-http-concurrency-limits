@@ -19,15 +19,15 @@ object HttpServerConcurrencyLimit {
   def liFoQueued(
     config: HttpLiFoQueuedConcurrencyLimitConfig
   )(implicit system: ActorSystem): BidiFlow[HttpRequest, HttpRequest, HttpResponse, HttpResponse, NotUsed] = {
-
+    import config._
     val typed = system.toTyped
 
     val limitActor: ActorRef[LimitActor.Element] =
       typed.systemActorOf(
-        LimitActor.liFoQueued(config.limitAlgorithm, config.maxLiFoQueueDepth, config.maxDelay, config.reqestTimeout),
+        LimitActor.liFoQueued(limitAlgorithm, maxLiFoQueueDepth, maxDelay, reqestTimeout),
         config.name
       )
-    GlobalLimitBidiFlow(limitActor, config.pipeliningLimit, config.reqestTimeout, config.rejectionResponse, config.result)
+    GlobalLimitBidiFlow(limitActor, pipeliningLimit, reqestTimeout, weight, rejectionResponse, result)
   }
 
   val TooManyRequestsResponse: HttpResponse = HttpResponse(StatusCodes.TooManyRequests, entity = "Too many requests")
@@ -39,6 +39,7 @@ final case class HttpLiFoQueuedConcurrencyLimitConfig(limitAlgorithm: Limit,
                                                       pipeliningLimit: Int,
                                                       reqestTimeout: FiniteDuration,
                                                       maxDelay: FiniteDuration,
+                                                      weight: HttpResponse => Int,
                                                       rejectionResponse: HttpRequest => HttpResponse,
                                                       result: HttpResponse => Outcome)
 
@@ -67,6 +68,7 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     * @param maxLiFoQueueDepth max queue depth - this is multiplied with the current concurrency limit to determine
     *                          queue length.
     * @param maxDelay the maximum time to wait in the lifo queue for available capacity.
+    * @param weight processing cost of request to adjust latency measurements.
     * @param rejectionResponse function to compute the response to give when rejecting a request.
     * @param result how to evaluate the response in terms of latency: was the request dropped, was it successfully
     *               processed, or should it be ignored for computing the adaptive concurrency limit
@@ -79,12 +81,13 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     limitAlgorithm: Limit,
     maxLiFoQueueDepth: Int = 16,
     maxDelay: FiniteDuration = 50.millis,
+    weight: HttpResponse => Int = _ => 1,
     rejectionResponse: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
     result: HttpResponse => Outcome = DefaultResult,
     name: String = "http-server-limiter"
   )(implicit system: ActorSystem): HttpLiFoQueuedConcurrencyLimitConfig = {
     val config = system.settings.config
-    val reqestTimeout = {
+    val requestTimeout = {
       val t = config.getDuration("akka.http.server.request-timeout")
       FiniteDuration(t.toNanos, TimeUnit.NANOSECONDS)
     }
@@ -94,8 +97,9 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
       maxLiFoQueueDepth,
       name,
       pipeliningLimit,
-      reqestTimeout,
+      requestTimeout,
       maxDelay,
+      weight,
       rejectionResponse,
       result
     )

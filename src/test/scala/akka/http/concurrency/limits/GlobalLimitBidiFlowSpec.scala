@@ -169,7 +169,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       }
 
       val testSetup = BidiFlow.fromGraph(
-        new GlobalLimitBidi[String, String](probe.ref, s => s"Rejected $s", verdict, 10, 2.seconds, clock)
+        new GlobalLimitBidi[String, String](probe.ref, 10, 2.seconds, _ => 1, s => s"Rejected $s", verdict, clock)
       ) join Flow
         .fromSinkAndSource(Sink.fromSubscriber(toWrapped), Source.fromPublisher(fromWrapped))
 
@@ -193,7 +193,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     def acceptRequest(): TestProbe[LimitActorCommand] = {
       val received = probe.expectMessageType[Element]
       val replyProbe = TestProbe[LimitActorCommand]()
-      received.sender ! new ElementAccepted(replyProbe.ref, received)
+      received.sender ! new ElementAccepted(replyProbe.ref, received.id)
       replyProbe
     }
   }

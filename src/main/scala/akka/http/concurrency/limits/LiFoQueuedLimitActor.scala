@@ -40,22 +40,37 @@ class LiFoQueuedLimitActor(limitAlgorithm: Limit,
       throttledLiFoQueue.filterInPlace(_.id eq elem.id)
       this
 
-    case Replied(start, duration, didDrop, elem) =>
-      if (inFlight.remove(elem.id)) {
+    case Replied(start, duration, didDrop, weight, id) =>
+      if (inFlight.remove(id)) {
         // raciness: timeout vs regular response are intentionally concurrent.
-        timers.cancel(elem.id)
-        limitAlgorithm.onSample(start, duration, inFlight.size, didDrop)
+        timers.cancel(id)
+        recordSamples(start, duration, didDrop, weight)
         maybeAcceptNext()
       }
       this
 
-    case Ignore(elem) =>
+    case Ignore(id) =>
       // raciness: timeout vs regular response are intentionally concurrent.
-      if (inFlight.remove(elem.id)) {
-        timers.cancel(elem.id)
+      if (inFlight.remove(id)) {
+        timers.cancel(id)
         maybeAcceptNext()
       }
       this
+  }
+
+  private def recordSamples(start: Long, duration: Long, didDrop: Boolean, weight: Int): Unit = {
+    if (weight == 1) {
+      limitAlgorithm.onSample(start, duration, inFlight.size, didDrop)
+    } else {
+      val itemDuration = duration / weight;
+      var i = 0
+      var startTime = start
+      while (i < weight) {
+        limitAlgorithm.onSample(startTime, itemDuration, inFlight.size, didDrop)
+        startTime += itemDuration
+        i += 1
+      }
+    }
   }
 
   private def rejectOrDelay(element: Element): Unit = {
@@ -75,7 +90,7 @@ class LiFoQueuedLimitActor(limitAlgorithm: Limit,
 
   private def acceptElement(element: Element): Unit = {
     inFlight += element.id
-    element.sender ! new ElementAccepted(context.self, element)
+    element.sender ! new ElementAccepted(context.self, element.id)
     timers.startSingleTimer(element.id, ElementTimedOut(element, clock()), timeout)
   }
 }

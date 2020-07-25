@@ -34,23 +34,23 @@ object LimitActor {
 
   final class Id
 
-  case class Replied(startTime: Long, duration: Long, didDrop: Boolean, element: Element)
+  case class Replied(startTime: Long, duration: Long, didDrop: Boolean, weight: Int, id: Id)
       extends LimitActorCommand
-  case class Ignore(element: Element) extends LimitActorCommand
+  case class Ignore(id: Id) extends LimitActorCommand
   case class ElementTimedOut(element: Element, startTime: Long) extends LimitActorCommand
   case class MaxDelayPassed(element: Element) extends LimitActorCommand
 
   sealed trait LimitActorResponse
 
-  class ElementAccepted(actor: ActorRef[LimitActorCommand], element: Element) extends LimitActorResponse {
+  class ElementAccepted(actor: ActorRef[LimitActorCommand], id: Id) extends LimitActorResponse {
 
-    def success(startTime: Long, endTime: Long): Unit =
-      actor ! Replied(startTime, endTime - startTime, didDrop = false, element)
+    def success(startTime: Long, endTime: Long, weight: Int): Unit =
+      actor ! Replied(startTime, endTime - startTime, didDrop = false, weight, id)
 
-    def dropped(startTime: Long, endTime: Long): Unit =
-      actor ! Replied(startTime, endTime - startTime, didDrop = true, element)
+    def dropped(startTime: Long, endTime: Long, weight: Int): Unit =
+      actor ! Replied(startTime, endTime - startTime, didDrop = true, weight, id)
 
-    def ignore(): Unit = actor ! Ignore(element)
+    def ignore(): Unit = actor ! Ignore(id)
   }
 
   case object ElementRejected extends LimitActorResponse

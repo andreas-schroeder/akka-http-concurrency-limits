@@ -21,9 +21,10 @@ object GlobalLimitBidiFlow {
   def apply[In, Out](limiter: ActorRef[Element],
                      parallelism: Int,
                      timeout: FiniteDuration,
+                     weight: Out => Int,
                      rejectionResponse: In => Out,
                      result: Out => Outcome = (_: Out) => Processed): BidiFlow[In, In, Out, Out, NotUsed] =
-    BidiFlow.fromGraph(new GlobalLimitBidi(limiter, rejectionResponse, result, parallelism, timeout))
+    BidiFlow.fromGraph(new GlobalLimitBidi(limiter, parallelism, timeout, weight, rejectionResponse, result))
 
   type LimitShape[In, Out] = BidiShape[In, In, Out, Out]
 
@@ -31,10 +32,11 @@ object GlobalLimitBidiFlow {
 }
 
 class GlobalLimitBidi[In, Out](limiter: ActorRef[Element],
-                               rejectionResponse: In => Out,
-                               result: Out => Outcome,
                                parallelism: Int,
                                timeout: FiniteDuration,
+                               weight: Out => Int,
+                               rejectionResponse: In => Out,
+                               result: Out => Outcome,
                                clock: () => Long = () => System.nanoTime())
     extends GraphStage[LimitShape[In, Out]] {
 
@@ -82,7 +84,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element],
         push(toWrapped, pendingElement)
 
       case Success(ElementRejected) => push(out, rejectionResponse(pendingElement))
-      case Failure(ex)                       => failStage(ex)
+      case Failure(ex)              => failStage(ex)
     }
 
     setHandler(toWrapped, new OutHandler {
@@ -102,8 +104,8 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element],
           val inflight = inFlightAccepted.dequeue()
           import inflight._
           result(response) match {
-            case Processed => accepted.success(startTime, clock())
-            case Dropped   => accepted.dropped(startTime, clock())
+            case Processed => accepted.success(startTime, clock(), weight(response))
+            case Dropped   => accepted.dropped(startTime, clock(), weight(response))
             case Ignored   => accepted.ignore()
           }
           push(out, response)
@@ -128,7 +130,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[Element],
     // any in-flight request at this time was dropped.
     override def postStop(): Unit = while (inFlightAccepted.nonEmpty) {
       val inFlight = inFlightAccepted.dequeue()
-      inFlight.accepted.dropped(inFlight.startTime, clock())
+      inFlight.accepted.dropped(inFlight.startTime, clock(), 1)
     }
   }
 }
