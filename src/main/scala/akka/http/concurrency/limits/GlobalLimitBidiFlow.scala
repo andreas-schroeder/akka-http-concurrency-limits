@@ -98,6 +98,8 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[LimitActorCommand],
       if (leases.used > 0) {
         val lease = leases.dequeue()
         if (lease.deadline < clock()) {
+          limiter ! ReleaseCapacityGrant(lease.id)
+          cancelTimer(lease.id)
           immediateAccept() // lease expired, try once more.
         } else {
           lease.amount -= 1
@@ -195,6 +197,7 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[LimitActorCommand],
 
     private def returnOrRelease(lease: Lease): Unit = {
       if (lease.amount == 0 || lease.deadline <= clock()) {
+        cancelTimer(lease.id)
         limiter ! ReleaseCapacityGrant(lease.id)
       } else {
         leases.enqueue(lease)
