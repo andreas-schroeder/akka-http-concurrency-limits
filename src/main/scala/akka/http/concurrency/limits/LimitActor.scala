@@ -15,43 +15,45 @@ object LimitActor {
     * @param maxDelay compute max acceptable delay for requests to queue for being accepted.
     */
   def liFoQueued(limitAlgorithm: Limit,
-                    maxLiFoQueueDepth: Int,
-                    maxDelay: FiniteDuration = 0.nanos,
-                    timeout: FiniteDuration = 1.second): Behavior[Element] =
+                 maxLiFoQueueDepth: Int,
+                 batchSize: Int = 10,
+                 batchTimeout: FiniteDuration = 500.millis,
+                 maxDelay: FiniteDuration = 0.nanos,
+                 timeout: FiniteDuration = 1.second): Behavior[LimitActorCommand] =
     Behaviors
-      .setup[LimitActorCommand](
-        ctx =>
-          Behaviors
-            .withTimers(
-              timers => new LiFoQueuedLimitActor(limitAlgorithm, maxLiFoQueueDepth, maxDelay, timeout, ctx, timers)
+      .setup[LimitActorMessage] { ctx =>
+        Behaviors.withTimers { timers =>
+          new LiFoQueuedLimitActor(
+            limitAlgorithm,
+            maxLiFoQueueDepth,
+            batchSize,
+            batchTimeout,
+            maxDelay,
+            timeout,
+            ctx,
+            timers
           )
-      )
+        }
+      }
       .narrow
 
-  sealed trait LimitActorCommand
+  sealed trait LimitActorMessage
+  sealed trait LimitActorCommand extends LimitActorMessage
+  sealed trait InternalLimitActorMessage extends LimitActorMessage
 
-  case class Element(sender: ActorRef[LimitActorResponse], id: Id = new Id) extends LimitActorCommand
+  class Id
 
-  final class Id
+  case class RequestCapacity(sender: ActorRef[LimitActorResponse], id: Id = new Id) extends LimitActorCommand
+  case class Replied(startTime: Long, duration: Long, didDrop: Boolean, weight: Int) extends LimitActorCommand
+  case object Ignore extends LimitActorCommand
+  case class ReleaseCapacityGrant(id: Id) extends LimitActorCommand
 
-  case class Replied(startTime: Long, duration: Long, didDrop: Boolean, weight: Int, id: Id)
-      extends LimitActorCommand
-  case class Ignore(id: Id) extends LimitActorCommand
-  case class ElementTimedOut(element: Element, startTime: Long) extends LimitActorCommand
-  case class MaxDelayPassed(element: Element) extends LimitActorCommand
+  case class MaxDelayPassed(request: RequestCapacity) extends InternalLimitActorMessage
+  case class CapacityGrantTimedOut(id: Id) extends InternalLimitActorMessage
 
   sealed trait LimitActorResponse
 
-  class ElementAccepted(actor: ActorRef[LimitActorCommand], id: Id) extends LimitActorResponse {
+  case class CapacityGranted(elements: Int, until: Long, id: Id) extends LimitActorResponse
+  case class CapacityRejected(elements: Int, until: Long) extends LimitActorResponse
 
-    def success(startTime: Long, endTime: Long, weight: Int): Unit =
-      actor ! Replied(startTime, endTime - startTime, didDrop = false, weight, id)
-
-    def dropped(startTime: Long, endTime: Long, weight: Int): Unit =
-      actor ! Replied(startTime, endTime - startTime, didDrop = true, weight, id)
-
-    def ignore(): Unit = actor ! Ignore(id)
-  }
-
-  case object ElementRejected extends LimitActorResponse
 }

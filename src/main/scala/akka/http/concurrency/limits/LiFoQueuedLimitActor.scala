@@ -9,88 +9,101 @@ import scala.collection.mutable
 import scala.concurrent.duration._
 
 class LiFoQueuedLimitActor(limitAlgorithm: Limit,
-                              maxLiFoQueueDepth: Int,
-                              maxDelay: FiniteDuration,
-                              timeout: FiniteDuration,
-                              context: ActorContext[LimitActorCommand],
-                              timers: TimerScheduler[LimitActorCommand],
-                              clock: () => Long = () => System.nanoTime())
-    extends AbstractBehavior[LimitActorCommand](context) {
+                           maxLiFoQueueDepth: Int,
+                           batchSize: Int,
+                           batchTimeout: FiniteDuration,
+                           maxDelay: FiniteDuration,
+                           timeout: FiniteDuration,
+                           context: ActorContext[LimitActorMessage],
+                           timers: TimerScheduler[LimitActorMessage],
+                           clock: () => Long = () => System.nanoTime())
+    extends AbstractBehavior[LimitActorMessage](context) {
 
+  private val totalTimeout = timeout + batchTimeout
+  private val batchTimeoutNanos = batchTimeout.toNanos
   private val inFlight: mutable.Set[Id] = mutable.Set.empty
-  private val throttledLiFoQueue: mutable.Stack[Element] = mutable.Stack.empty
+  private val throttledLiFoQueue: mutable.Stack[RequestCapacity] = mutable.Stack.empty
   private var limit: Int = limitAlgorithm.getLimit
   limitAlgorithm.notifyOnChange(l => limit = l)
 
-  def onMessage(command: LimitActorCommand): Behavior[LimitActorCommand] = command match {
-    case received: Element =>
-      if (inFlight.size < limit) acceptElement(received) else rejectOrDelay(received)
+  def grant(id: Id): CapacityGranted = CapacityGranted(batchSize, clock() + batchTimeoutNanos, id)
+  def reject: CapacityRejected = CapacityRejected(batchSize, clock() + batchTimeoutNanos)
+
+  def onMessage(command: LimitActorMessage): Behavior[LimitActorMessage] = command match {
+    case request: RequestCapacity =>
+      if (inFlight.size < limit) acceptRequest(request) else rejectOrDelay(request)
       this
 
-    case ElementTimedOut(element, startTime) =>
-      if (inFlight.remove(element.id)) {
-        // raciness: timeout vs regular response are intentionally concurrent.
-        limitAlgorithm.onSample(startTime, clock() - startTime, inFlight.size, true)
-        maybeAcceptNext()
-      }
-      this
-
-    case MaxDelayPassed(elem) =>
-      elem.sender ! ElementRejected
-      throttledLiFoQueue.filterInPlace(_.id eq elem.id)
-      this
-
-    case Replied(start, duration, didDrop, weight, id) =>
+    case ReleaseCapacityGrant(id) =>
       if (inFlight.remove(id)) {
-        // raciness: timeout vs regular response are intentionally concurrent.
-        timers.cancel(id)
-        recordSamples(start, duration, didDrop, weight)
-        maybeAcceptNext()
-      }
-      this
-
-    case Ignore(id) =>
-      // raciness: timeout vs regular response are intentionally concurrent.
-      if (inFlight.remove(id)) {
+        // raciness: timeout vs regular release are intentionally concurrent.
         timers.cancel(id)
         maybeAcceptNext()
       }
+      this
+
+    case CapacityGrantTimedOut(id) =>
+      if (inFlight.remove(id)) {
+        // raciness: timeout vs regular release are intentionally concurrent.
+        recordRequestDrop()
+        maybeAcceptNext()
+      }
+      this
+
+    case MaxDelayPassed(request) =>
+      request.sender ! reject
+      throttledLiFoQueue.filterInPlace(_.id eq request.id)
+      this
+
+    case replied: Replied =>
+      recordSamples(replied)
+      this
+
+    case Ignore =>
       this
   }
 
-  private def recordSamples(start: Long, duration: Long, didDrop: Boolean, weight: Int): Unit = {
+  private def recordRequestDrop(): Unit = {
+    val totalTimeoutNanos = totalTimeout.toNanos
+    val now = clock()
+    val startTime = now - totalTimeoutNanos
+    limitAlgorithm.onSample(startTime, totalTimeoutNanos, inFlight.size, true)
+  }
+
+  private def recordSamples(replied: Replied): Unit = {
+    import replied.{startTime, duration, weight, didDrop}
     if (weight == 1) {
-      limitAlgorithm.onSample(start, duration, inFlight.size, didDrop)
+      limitAlgorithm.onSample(startTime, duration, inFlight.size, didDrop)
     } else {
-      val itemDuration = duration / weight;
+      val itemDuration = duration / weight
       var i = 0
-      var startTime = start
+      var start = replied.startTime
       while (i < weight) {
-        limitAlgorithm.onSample(startTime, itemDuration, inFlight.size, didDrop)
-        startTime += itemDuration
+        limitAlgorithm.onSample(start, itemDuration, inFlight.size, didDrop)
+        start += itemDuration
         i += 1
       }
     }
   }
 
-  private def rejectOrDelay(element: Element): Unit = {
+  private def rejectOrDelay(request: RequestCapacity): Unit = {
     if (maxDelay.length == 0 || throttledLiFoQueue.size >= maxLiFoQueueDepth * limit) {
-      element.sender ! ElementRejected
+      request.sender ! reject
     } else {
-      throttledLiFoQueue.push(element)
-      timers.startSingleTimer(element.id, MaxDelayPassed(element), maxDelay)
+      throttledLiFoQueue.push(request)
+      timers.startSingleTimer(request.id, MaxDelayPassed(request), maxDelay)
     }
   }
 
-  def maybeAcceptNext(): Unit = if (inFlight.size < limit && throttledLiFoQueue.nonEmpty) {
-    val element = throttledLiFoQueue.pop()
-    timers.cancel(element.id)
-    acceptElement(element)
+  def maybeAcceptNext(): Unit = if (throttledLiFoQueue.nonEmpty && inFlight.size < limit) {
+    val request = throttledLiFoQueue.pop()
+    timers.cancel(request.id)
+    acceptRequest(request)
   }
 
-  private def acceptElement(element: Element): Unit = {
-    inFlight += element.id
-    element.sender ! new ElementAccepted(context.self, element.id)
-    timers.startSingleTimer(element.id, ElementTimedOut(element, clock()), timeout)
+  private def acceptRequest(request: RequestCapacity): Unit = {
+    request.sender ! grant(request.id)
+    inFlight.addOne(request.id)
+    timers.startSingleTimer(request.id, CapacityGrantTimedOut(request.id), totalTimeout)
   }
 }

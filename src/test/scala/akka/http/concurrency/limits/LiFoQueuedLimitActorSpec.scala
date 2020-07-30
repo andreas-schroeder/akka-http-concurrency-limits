@@ -25,32 +25,44 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
 
   val manualTime: ManualTime = ManualTime()
 
-  def spawnActorAndProbe(limit: Limit = new SettableLimit(1),
-                         maxQueueDepth: Int = 1,
-                         maxDelay: FiniteDuration = 0.millis,
-                         timeout: FiniteDuration = 2.seconds): (ActorRef[Element], TestProbe[LimitActorResponse]) =
-    (spawn(LimitActor.liFoQueued(limit, maxQueueDepth, maxDelay, timeout)), TestProbe[LimitActorResponse]())
+  def spawnActorAndProbe(
+    limit: Limit = new SettableLimit(1),
+    maxQueueDepth: Int = 1,
+    batchSize: Int = 1,
+    batchTimeout: FiniteDuration = 0.millis,
+    maxDelay: FiniteDuration = 0.millis,
+    timeout: FiniteDuration = 2.seconds
+  ): (ActorRef[LimitActorCommand], TestProbe[LimitActorResponse]) =
+    (
+      spawn(LimitActor.liFoQueued(limit, maxQueueDepth, batchSize, batchTimeout, maxDelay, timeout)),
+      TestProbe[LimitActorResponse]()
+    )
 
-  def element(probe: TestProbe[LimitActorResponse]): Element = Element(probe.ref)
+  def request(probe: TestProbe[LimitActorResponse]): RequestCapacity = RequestCapacity(probe.ref)
+
+  def release(grant: CapacityGranted): ReleaseCapacityGrant = ReleaseCapacityGrant(grant.id)
+
+  def replied(startTime: Long = 1, duration: Long = 5, didDrop: Boolean = false, weight: Int = 1): Replied =
+    Replied(startTime, duration, didDrop, weight)
 
   "LiFoQueuedLimitActor" should {
 
     "accept requests when below limit" in {
       val (actor, probe: TestProbe[LimitActorResponse]) = spawnActorAndProbe()
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted]
+      probe.expectMessageType[CapacityGranted]
     }
 
     "queue requests when above concurrency limit and below queue capacity limit" in {
       val (actor, probe) = spawnActorAndProbe(maxDelay = 100.millis)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
       probe.receiveMessage()
 
-      actor ! element(probe)
+      actor ! request(probe)
 
       probe.expectNoMessage(10.millis) // no immediate rejection.
     }
@@ -58,51 +70,51 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
     "immediately reject requests when above concurrency limit and above queue capacity limit" in {
       val (actor, probe) = spawnActorAndProbe(maxDelay = 100.millis)
 
-      actor ! element(probe) // accepted ...
+      actor ! request(probe) // accepted ...
 
       probe.receiveMessage()
 
-      actor ! element(probe) // queued ...
+      actor ! request(probe) // queued ...
 
-      actor ! element(probe) // rejected.
+      actor ! request(probe) // rejected.
 
-      probe.expectMessage(ElementRejected)
+      probe.expectMessageType[CapacityRejected]
     }
 
     "immediately reject requests when above concurrency limit and request has no delay time" in {
       val (actor, probe) = spawnActorAndProbe(new SettableLimit(0))
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessage(ElementRejected)
+      probe.expectMessageType[CapacityRejected]
     }
 
     "eventually reject queued requests when max delay time exceeded" in {
       val (actor, probe) = spawnActorAndProbe(maxDelay = 100.millis)
 
-      actor ! element(probe) // accepted ...
+      actor ! request(probe) // accepted ...
 
       probe.receiveMessage()
 
-      actor ! element(probe) // queued ...
+      actor ! request(probe) // queued ...
 
       manualTime.timePasses(110.millis)
 
-      probe.expectMessage(ElementRejected)
+      probe.expectMessageType[CapacityRejected]
     }
 
     "eventually accept queued requests when concurrency limit is undershot" in {
       val (actor, probe) = spawnActorAndProbe(maxDelay = 500.millis)
 
-      actor ! element(probe) // accepted ...
+      actor ! request(probe) // accepted ...
 
-      val accepted = probe.expectMessageType[ElementAccepted]
+      val grant = probe.expectMessageType[CapacityGranted]
 
-      actor ! element(probe) // queued ...
+      actor ! request(probe) // queued ...
 
-      accepted.success(1L, 5L, 1) // complete first request
+      actor ! release(grant) // release grant
 
-      probe.expectMessageType[ElementAccepted]
+      probe.expectMessageType[CapacityGranted]
     }
 
     "accept queued requests in LiFo order" in {
@@ -110,59 +122,45 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
 
       val probe2 = TestProbe[LimitActorResponse]()
 
-      actor ! element(probe) // accepted ...
+      actor ! request(probe) // accepted ...
 
-      val accepted = probe.expectMessageType[ElementAccepted]
+      val grant = probe.expectMessageType[CapacityGranted]
 
-      actor ! element(probe) // queued ...
+      actor ! request(probe) // queued ...
 
-      actor ! element(probe2) // queued ...
+      actor ! request(probe2) // queued ...
 
-      accepted.success(1L, 5L, 1) // complete first request
+      actor ! release(grant) // release first grant
 
-      val accepted2 = probe2.expectMessageType[ElementAccepted] // second element is acceped first.
+      probe2.expectMessageType[CapacityGranted] // second request is accepted first.
     }
 
     "eventually timeout accepted requests when response does not arrive in time" in {
       val limit = new TestLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted]
+      probe.expectMessageType[CapacityGranted]
 
       manualTime.timePasses(3.seconds) // based on Akka Http server timeout (set to 2 seconds)
 
       limit.dropped shouldBe 1
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted] // next request gets accepted
-    }
-
-    "ignore response after accepted request timed out" in {
-      val limit = new TestLimit(1)
-      val (actor, probe) = spawnActorAndProbe(limit)
-
-      actor ! element(probe)
-
-      val accepted = probe.expectMessageType[ElementAccepted]
-
-      manualTime.timePasses(3.seconds) // based on Akka Http server timeout (set to 2 seconds)
-
-      accepted.success(1L, 5L, 1)
-
-      limit.dropped shouldBe 1
-      limit.success shouldBe 0
+      probe.expectMessageType[CapacityGranted] // next request gets accepted
     }
 
     "forward successful response outcome to limit algorithm" in {
       val limit = new TestLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted].success(1L, 5L, 1)
+      probe.expectMessageType[CapacityGranted]
+
+      actor ! replied()
 
       limit.dropped shouldBe 0
       limit.success shouldBe 1
@@ -172,22 +170,25 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
       val limit = new TestLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted].success(1L, 16L, 3)
+      probe.expectMessageType[CapacityGranted]
+
+      actor ! replied(weight = 3)
 
       limit.dropped shouldBe 0
       limit.success shouldBe 3
     }
 
-
     "forward dropped response outcome to limit algorithm" in {
       val limit = new TestLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted].dropped(1L, 5L, 1)
+      probe.expectMessageType[CapacityGranted]
+
+      actor ! replied(didDrop = true)
 
       limit.dropped shouldBe 1
       limit.success shouldBe 0
@@ -197,9 +198,11 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
       val limit = new TestLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted].ignore()
+      probe.expectMessageType[CapacityGranted]
+
+      actor ! Ignore
 
       limit.dropped shouldBe 0
       limit.success shouldBe 0
@@ -209,32 +212,32 @@ class LiFoQueuedLimitActorSpec extends ScalaTestWithActorTestKit(LiFoQueuedLimit
       val limit = new SettableLimit(0)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessage(ElementRejected) // over capacity
+      probe.expectMessageType[CapacityRejected] // over capacity
 
       limit.setLimit(1) // capacity increases
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      probe.expectMessageType[ElementAccepted] // now within capacity
+      probe.expectMessageType[CapacityGranted] // now within capacity
     }
 
     "adjust limit when limit algorithm decreases limit" in {
       val limit = new SettableLimit(1)
       val (actor, probe) = spawnActorAndProbe(limit)
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      val accept = probe.expectMessageType[ElementAccepted] // within capacity
+      val accept = probe.expectMessageType[CapacityGranted] // within capacity
 
       limit.setLimit(0) // capacity decreases
 
-      actor ! element(probe)
+      actor ! request(probe)
 
-      accept.success(1L, 5L, 1)
+      actor ! replied()
 
-      probe.expectMessage(ElementRejected) // still over capacity
+      probe.expectMessageType[CapacityRejected] // still over capacity
     }
   }
 }

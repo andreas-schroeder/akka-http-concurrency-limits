@@ -29,6 +29,8 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
 
   val manualTime: ManualTime = ManualTime()
 
+  val oneSecondNanos = 1.second.toNanos
+
   "LimitBidiFlow" should {
     "pull from response-in when initial and response-out is pulled" in new ConnectedLimitBidiFlow {
       start()
@@ -45,14 +47,14 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "ask limiter actor when request-in is pushed" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      probe.expectMessageType[Element]
+      probe.expectMessageType[RequestCapacity]
     }
 
     "reject request when limiter actor replies with reject" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      val received = probe.expectMessageType[Element]
-      received.sender ! ElementRejected
+      val received = probe.expectMessageType[RequestCapacity]
+      received.sender ! CapacityRejected(10, oneSecondNanos)
 
       out.expectNext() shouldBe "Rejected One"
     }
@@ -85,10 +87,10 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "measure latency of responses" in new PulledLimitBidiFlow {
       start(5L, 50L)
       in.sendNext("One")
-      val replyProbe = acceptRequest()
+      acceptRequest()
       fromWrapped.sendNext("One Response")
 
-      val replied = replyProbe.expectMessageType[Replied]
+      val replied = probe.expectMessageType[Replied]
       replied.startTime shouldBe 5L
       replied.duration shouldBe 45L
       replied.didDrop shouldBe false
@@ -97,48 +99,52 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "ignore latency when outcome is Ignore" in new PulledLimitBidiFlow {
       start(5L, 50L)
       in.sendNext("One")
-      val replyProbe = acceptRequest()
+      acceptRequest()
       fromWrapped.sendNext("Ignore")
 
-      replyProbe.expectMessageType[Ignore]
+      probe.expectMessage(Ignore)
     }
 
     "Announce request drop if stage stops (e.g. due to stage completion)" in new PulledLimitBidiFlow {
       start()
 
       in.sendNext("One")
-      val replyProbe = acceptRequest()
+      acceptRequest()
 
       // Stage completes (e.g. http server blueprint will cancel on request timeout)
       out.cancel()
       in.sendComplete()
 
-      val replied = replyProbe.expectMessageType[Replied]
+      val replied = probe.expectMessageType[Replied]
       replied.didDrop shouldBe true
     }
 
     "report responses of pipelined requests in order" in new PulledLimitBidiFlow {
-      start()
+      start(weight = {
+        case "One Response" => 1
+        case "Two Response" => 2
+      })
 
       // first request pulled
       in.sendNext("One")
-      val replyProbe1 = acceptRequest()
+      acceptRequest()
       toWrapped.expectNext()
 
       // second request pulled before first one completes
       toWrapped.request(1)
       in.sendNext("Two")
-      val replyProbe2 = acceptRequest()
+      acceptRequest()
 
       // first response provided
       fromWrapped.sendNext("One Response")
-      out.expectNext()
-      replyProbe1.expectMessageType[Replied]
+      out.expectNext() shouldBe "One Response"
+      probe.expectMessageType[Replied].weight shouldBe 1
 
       // second response provided
       out.request(1)
       fromWrapped.sendNext("Two Response")
-      replyProbe2.expectMessageType[Replied]
+      out.expectNext() shouldBe "Two Response"
+      probe.expectMessageType[Replied].weight shouldBe 2
     }
   }
 
@@ -150,9 +156,9 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     val toWrapped = TestSubscriber.probe[String]()
     val fromWrapped = TestPublisher.probe[String]()
     val out = TestSubscriber.probe[String]()
-    val probe = TestProbe[Element]()
+    val probe = TestProbe[LimitActorCommand]()
 
-    def start(startTime: Long = 1L, replyTime: Long = 2L) = {
+    def start(startTime: Long = 1L, replyTime: Long = 2L, weight: String => Int = _ => 1) = {
       val verdict: String => Outcome = {
         case "Ignore" => Ignored
         case "Drop"   => Dropped
@@ -169,7 +175,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       }
 
       val testSetup = BidiFlow.fromGraph(
-        new GlobalLimitBidi[String, String](probe.ref, 10, 2.seconds, _ => 1, s => s"Rejected $s", verdict, clock)
+        new GlobalLimitBidi[String, String](probe.ref, 10, 2.seconds, weight, s => s"Rejected $s", verdict, clock)
       ) join Flow
         .fromSinkAndSource(Sink.fromSubscriber(toWrapped), Source.fromPublisher(fromWrapped))
 
@@ -184,17 +190,16 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
 
   trait PulledLimitBidiFlow extends ConnectedLimitBidiFlow {
 
-    override def start(startTime: Long, replyTime: Long): Unit = {
-      super.start(startTime, replyTime)
+    override def start(startTime: Long, replyTime: Long, weight: String => Int = _ => 1): Unit = {
+      super.start(startTime, replyTime, weight)
       out.request(1)
       toWrapped.request(1)
     }
 
-    def acceptRequest(): TestProbe[LimitActorCommand] = {
-      val received = probe.expectMessageType[Element]
+    def acceptRequest(): Unit = {
+      val received = probe.expectMessageType[RequestCapacity]
       val replyProbe = TestProbe[LimitActorCommand]()
-      received.sender ! new ElementAccepted(replyProbe.ref, received.id)
-      replyProbe
+      received.sender ! CapacityGranted(10, oneSecondNanos, received.id)
     }
   }
 }

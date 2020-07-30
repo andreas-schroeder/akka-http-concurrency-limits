@@ -22,12 +22,12 @@ object HttpServerConcurrencyLimit {
     import config._
     val typed = system.toTyped
 
-    val limitActor: ActorRef[LimitActor.Element] =
+    val limitActor: ActorRef[LimitActor.LimitActorCommand] =
       typed.systemActorOf(
-        LimitActor.liFoQueued(limitAlgorithm, maxLiFoQueueDepth, maxDelay, reqestTimeout),
+        LimitActor.liFoQueued(limitAlgorithm, maxLiFoQueueDepth, batchSize, batchTimeout, maxDelay, requestTimeout),
         config.name
       )
-    GlobalLimitBidiFlow(limitActor, pipeliningLimit, reqestTimeout, weight, rejectionResponse, result)
+    GlobalLimitBidiFlow(limitActor, pipeliningLimit, requestTimeout, weight, rejectionResponse, result)
   }
 
   val TooManyRequestsResponse: HttpResponse = HttpResponse(StatusCodes.TooManyRequests, entity = "Too many requests")
@@ -35,9 +35,11 @@ object HttpServerConcurrencyLimit {
 
 final case class HttpLiFoQueuedConcurrencyLimitConfig(limitAlgorithm: Limit,
                                                       maxLiFoQueueDepth: Int,
+                                                      batchSize: Int,
+                                                      batchTimeout: FiniteDuration,
                                                       name: String,
                                                       pipeliningLimit: Int,
-                                                      reqestTimeout: FiniteDuration,
+                                                      requestTimeout: FiniteDuration,
                                                       maxDelay: FiniteDuration,
                                                       weight: HttpResponse => Int,
                                                       rejectionResponse: HttpRequest => HttpResponse,
@@ -80,6 +82,8 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
   def apply(
     limitAlgorithm: Limit,
     maxLiFoQueueDepth: Int = 16,
+    batchSize: Int = 10,
+    batchTimeout: FiniteDuration = 500.millis,
     maxDelay: FiniteDuration = 50.millis,
     weight: HttpResponse => Int = _ => 1,
     rejectionResponse: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
@@ -95,6 +99,8 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     new HttpLiFoQueuedConcurrencyLimitConfig(
       limitAlgorithm,
       maxLiFoQueueDepth,
+      batchSize,
+      batchTimeout,
       name,
       pipeliningLimit,
       requestTimeout,
