@@ -69,6 +69,8 @@ limit. The `config` object allows to modify the behavior of the global concurren
 | ------------------|-------------|---------|
 | limitAlgorithm    | the limit algorithm to use. | none |
 | maxLiFoQueueDepth | max queue depth - this is multiplied with the current concurrency limit to determine queue length. | 16 |
+| batchSize         | amount of requests that may be served given a single capacity grant of the global limiter actor. | 10 |
+| batchTimeout      | validity time of capacity grant batches provided by the global limiter actor. | 500 ms |
 | maxDelay          | the maximum time to wait in the lifo queue for available capacity. | 50 ms |
 | weight            | relative processing cost of request to adjust latency measurements. | 1 |
 | rejectionResponse | function to compute the response to give when rejecting a request. | Http 429 - too many requests |
@@ -130,7 +132,8 @@ reached. Instead, it immediately rejects elements once at capacity, and by this:
 ## Performance Penalty
 
 Introducing a global concurrency limit means introducing a global lock over all http route instances that are
-otherwise connection-local only. The performance penalty of this is roughly 10% - 15% in both CPU
-and throughput for the route above serving only Http 200 Ok. For a route that has a 5 ms delay,
-the throughput penalty vanishes, while CPU is still roughly 10% - 15%. Run a benchmark to 
-evaluate how much of a penalty it would be for you.
+otherwise connection-local only. With grant batch size of 1 to 10, the performance penalty of this is roughly 10% - 15% 
+in throughput for the route above serving only Http 200 Ok. For a route that has a 5 ms delay,
+the throughput penalty vanishes. With a grant batch size of 1000, even the performance penalty for a simple 200 Ok route
+vanishes as well (at a benchmark throughput of ~ 19.000 op/s). Run a benchmark to evaluate how much of a penalty
+it would be for you.  

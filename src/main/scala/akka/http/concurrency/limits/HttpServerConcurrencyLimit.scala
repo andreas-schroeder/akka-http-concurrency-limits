@@ -69,6 +69,8 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     * @param limitAlgorithm the limit algorithm to use.
     * @param maxLiFoQueueDepth max queue depth - this is multiplied with the current concurrency limit to determine
     *                          queue length.
+    * @param batchSize amount of requests that may be served given a single capacity grant of the global limiter actor.
+    * @param batchTimeout validity time of capacity grant batches provided by the global limiter actor.
     * @param maxDelay the maximum time to wait in the lifo queue for available capacity.
     * @param weight processing cost of request to adjust latency measurements.
     * @param rejectionResponse function to compute the response to give when rejecting a request.
