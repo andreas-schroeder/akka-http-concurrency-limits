@@ -1,5 +1,3 @@
-version := "0.0.1"
-
 organization := "io.github.andreas-schroeder"
 
 scalaVersion := "2.13.3"
