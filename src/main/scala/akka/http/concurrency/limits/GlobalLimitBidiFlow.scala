@@ -143,8 +143,11 @@ class GlobalLimitBidi[In, Out](limiter: ActorRef[LimitActorCommand],
     private val limiterResponse = createAsyncCallback[Try[LimitActorResponse]] {
       case Success(CapacityGranted(amount, deadline, id)) =>
         val lease = new Lease(amount, deadline, id)
-        if (pending) accept(lease) else leases.enqueue(lease)
-        scheduleOnce(id, deadline.nanos)
+        if (pending) {
+          lease.amount -= 1
+          accept(lease)
+        } else leases.enqueue(lease)
+        scheduleOnce(id, (deadline - clock()).nanos)
 
       case Success(CapacityRejected(amount, deadline)) =>
         if (amount == 1 && pending) {

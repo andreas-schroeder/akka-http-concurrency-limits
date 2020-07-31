@@ -62,7 +62,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "forward request when limiter actor replies with accept" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
 
       toWrapped.expectNext() shouldBe "One"
     }
@@ -79,7 +79,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "forward response when response-in is pushed" in new PulledLimitBidiFlow {
       start()
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
       fromWrapped.sendNext("One Response")
       out.expectNext() shouldBe "One Response"
     }
@@ -87,7 +87,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "measure latency of responses" in new PulledLimitBidiFlow {
       start(5L, 50L)
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
       fromWrapped.sendNext("One Response")
 
       val replied = probe.expectMessageType[Replied]
@@ -99,7 +99,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
     "ignore latency when outcome is Ignore" in new PulledLimitBidiFlow {
       start(5L, 50L)
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
       fromWrapped.sendNext("Ignore")
 
       probe.expectMessage(Ignore)
@@ -109,7 +109,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       start()
 
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
 
       // Stage completes (e.g. http server blueprint will cancel on request timeout)
       out.cancel()
@@ -119,7 +119,7 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       replied.didDrop shouldBe true
     }
 
-    "report responses of pipelined requests in order" in new PulledLimitBidiFlow {
+    "report responses of pipelined requests in order and requests additional capacity" in new PulledLimitBidiFlow {
       start(weight = {
         case "One Response" => 1
         case "Two Response" => 2
@@ -127,13 +127,13 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
 
       // first request pulled
       in.sendNext("One")
-      acceptRequest()
+      grantCapacity()
       toWrapped.expectNext()
 
       // second request pulled before first one completes
       toWrapped.request(1)
       in.sendNext("Two")
-      acceptRequest()
+      grantCapacity()
 
       // first response provided
       fromWrapped.sendNext("One Response")
@@ -146,6 +146,78 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       out.expectNext() shouldBe "Two Response"
       probe.expectMessageType[Replied].weight shouldBe 2
     }
+
+    "processes sequential requests with one capacity grant" in new PulledLimitBidiFlow {
+      start()
+
+      // first request pulled
+      in.sendNext("One")
+      grantCapacity(2)
+      toWrapped.expectNext()
+
+      fromWrapped.sendNext("One Response")
+      out.expectNext()
+
+      // second request pulled
+      out.request(1)
+      toWrapped.request(1)
+      in.sendNext("Two")
+      // no capacity request & grant here, still element is passed through
+      toWrapped.expectNext()
+      fromWrapped.sendNext("Two Response")
+      out.expectNext() shouldBe "Two Response"
+    }
+
+    "releases capacity grant once consumed" in new PulledLimitBidiFlow {
+      start()
+
+      // first request pulled
+      in.sendNext("One")
+      grantCapacity(1)
+      toWrapped.expectNext()
+
+      fromWrapped.sendNext("One Response")
+      out.expectNext()
+      probe.expectMessageType[Replied]
+
+      probe.expectMessageType[ReleaseCapacityGrant]
+    }
+
+    "releases capacity grant once timed out" in new PulledLimitBidiFlow {
+      start(replyTime = 2000L)
+
+      // first request pulled
+      in.sendNext("One")
+      grantCapacity(20, deadline = 2000L + oneSecondNanos)
+      toWrapped.expectNext()
+
+      fromWrapped.sendNext("One Response")
+      out.expectNext()
+      probe.expectMessageType[Replied]
+
+      manualTime.timePasses(2.seconds)
+
+      probe.expectMessageType[ReleaseCapacityGrant]
+    }
+
+    "releases timed out capacity grant once response is received" in new PulledLimitBidiFlow {
+      start(replyTime = 3000L + oneSecondNanos)
+
+      // first request pulled
+      in.sendNext("One")
+      grantCapacity(20, deadline = 2000L + oneSecondNanos)
+      toWrapped.expectNext()
+
+      manualTime.timePasses(2.seconds)
+      probe.expectNoMessage()
+
+      fromWrapped.sendNext("One Response")
+      out.expectNext()
+      probe.expectMessageType[Replied]
+
+      probe.expectMessageType[ReleaseCapacityGrant]
+    }
+
   }
 
   //noinspection TypeAnnotation
@@ -196,10 +268,9 @@ class GlobalLimitBidiFlowSpec extends ScalaTestWithActorTestKit(GlobalLimitBidiF
       toWrapped.request(1)
     }
 
-    def acceptRequest(): Unit = {
+    def grantCapacity(amount: Int = 10, deadline: Long = oneSecondNanos): Unit = {
       val received = probe.expectMessageType[RequestCapacity]
-      val replyProbe = TestProbe[LimitActorCommand]()
-      received.sender ! CapacityGranted(10, oneSecondNanos, received.id)
+      received.sender ! CapacityGranted(amount, deadline, received.id)
     }
   }
 }
