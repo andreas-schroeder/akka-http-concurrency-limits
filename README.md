@@ -27,7 +27,7 @@ response times. For more details on motivation and design, see also the accordin
 For sbt, add
 ```scala
 libraryDependencies ++= Seq(
-  "io.github.andreas-schroeder" %% "akka-http-concurrency-limits" % "0.0.1",
+  "io.github.andreas-schroeder" %% "akka-http-concurrency-limits" % "0.0.2",
 )
 ```
 
