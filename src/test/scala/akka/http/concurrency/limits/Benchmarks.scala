@@ -30,7 +30,7 @@ object Benchmarks {
 
   def compareRoutes(name: String, route: Route, limitFlow: LimitFlow)(implicit system: ActorSystem): Seq[BenchmarkResult] = {
     def run(route: Flow[HttpRequest, HttpResponse, NotUsed], name: String) = {
-      val binding = Await.result(Http().bindAndHandle(route, "0.0.0.0", 8080), 2.seconds)
+      val binding = Await.result(Http().newServerAt("0.0.0.0", 8080).bindFlow(route), 2.seconds)
       println(s"$name:")
       val b = benchmark(name, clientFlow(8080), 10, 30)
       Await.ready(binding.terminate(2.seconds), 3.seconds)

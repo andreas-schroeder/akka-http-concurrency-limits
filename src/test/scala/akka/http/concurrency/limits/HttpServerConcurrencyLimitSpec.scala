@@ -21,7 +21,7 @@ class HttpServerConcurrencyLimitSpec extends AnyWordSpec with Matchers {
     val config = HttpLiFoQueuedConcurrencyLimitConfig(new SettableLimit(10))
     val limitFlow = HttpServerConcurrencyLimit.liFoQueued(config)
 
-    Await.ready(Http().bindAndHandle(limitFlow join route, "0.0.0.0", 8080), 2.seconds)
+    Await.ready(Http().newServerAt("0.0.0.0", 8080).bindFlow(limitFlow join route), 2.seconds)
 
     try {
       body(system)

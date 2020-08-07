@@ -64,6 +64,8 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
       case _              => Processed
   }
 
+  val requestWeightExtractor: HttpResponse => Int = _.attribute(RequestWeight.attributeKey).map(_.weight).getOrElse(1)
+
   /**
     *
     * @param limitAlgorithm the limit algorithm to use.
@@ -87,7 +89,7 @@ object HttpLiFoQueuedConcurrencyLimitConfig {
     batchSize: Int = 10,
     batchTimeout: FiniteDuration = 500.millis,
     maxDelay: FiniteDuration = 50.millis,
-    weight: HttpResponse => Int = _ => 1,
+    weight: HttpResponse => Int = requestWeightExtractor,
     rejectionResponse: HttpRequest => HttpResponse = _ => HttpServerConcurrencyLimit.TooManyRequestsResponse,
     result: HttpResponse => Outcome = DefaultResult,
     name: String = "http-server-limiter"

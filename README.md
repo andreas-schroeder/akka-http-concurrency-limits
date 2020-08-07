@@ -27,7 +27,7 @@ response times. For more details on motivation and design, see also the accordin
 For sbt, add
 ```scala
 libraryDependencies ++= Seq(
-  "io.github.andreas-schroeder" %% "akka-http-concurrency-limits" % "0.0.2",
+  "io.github.andreas-schroeder" %% "akka-http-concurrency-limits" % "0.0.3",
 )
 ```
 
@@ -56,7 +56,7 @@ val route = pathSingleSlash {
     }
   }
 
-Http().bindAndHandle(limitFlow join route, "0.0.0.0", 8080)
+Http().newServerAt("0.0.0.0", 8080).bindFlow(limitFlow join route)
 ```
 
 In the above example, `limitFlow` is a bidirectional flow that wraps the route
@@ -72,7 +72,7 @@ limit. The `config` object allows to modify the behavior of the global concurren
 | batchSize         | amount of requests that may be served given a single capacity grant of the global limiter actor. | 10 |
 | batchTimeout      | validity time of capacity grant batches provided by the global limiter actor. | 500 ms |
 | maxDelay          | the maximum time to wait in the lifo queue for available capacity. | 50 ms |
-| weight            | relative processing cost of request to adjust latency measurements. | 1 |
+| weight            | relative processing cost of request to adjust latency measurements. | extracts RequestWeight [attribute](https://doc.akka.io/docs/akka-http/current/common/http-model.html#attributes) from response, defaults to 1 |
 | rejectionResponse | function to compute the response to give when rejecting a request. | Http 429 - too many requests |
 | result            | how to evaluate the response in terms of latency: was the request dropped, was it successfully processed, or should it be ignored for computing the adaptive concurrency limit. | ignore client and server errors, measure all others |
 | name              | name of the limit actor. Must be globally unique. Specify if you need to create more than one server limiter. | http-server-limiter |

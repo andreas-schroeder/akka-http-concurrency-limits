@@ -3,7 +3,7 @@ organization := "io.github.andreas-schroeder"
 scalaVersion := "2.13.3"
 
 val akkaVersion = "2.6.6"
-val akkaHttpVersion = "10.1.12"
+val akkaHttpVersion = "10.2.0"
 
 libraryDependencies ++= Seq(
   "com.netflix.concurrency-limits" % "concurrency-limits-core" % "0.3.6",
